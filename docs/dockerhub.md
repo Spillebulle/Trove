@@ -4,7 +4,7 @@ Claims the games that are temporarily free on stores you already have accounts
 with, starting with the Epic Games Store. Self-hosted, one browser profile per
 account, a ledger of every attempt, and Discord or webhook notifications.
 
-Source and full documentation: **https://github.com/Spillebulle/trove**
+Source and full documentation: **https://github.com/Spillebulle/Trove**
 
 ## Run it
 
