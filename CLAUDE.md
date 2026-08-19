@@ -586,7 +586,7 @@ session trusting something nobody has run.
   connection to the VNC port is made.
 - **What the store shows the container's un-driven window, from a datacenter
   address.** The smoke workflow captures the container's display over its VNC
-  port after "sign in here" (`docs/images/05-container-screen.png`, taken on
+  port after "sign in here" (`docs/images/08-container-screen.png`, taken on
   a GitHub Actions runner): real Chrome on the Xvfb, the Epic store front page
   fully rendered, a "Sign in" button, and **no Cloudflare interstitial at
   all** - from an address that is about as datacenter as an address gets. One

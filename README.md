@@ -80,7 +80,7 @@ In the container the same button opens that window on the container's own
 virtual screen and shows you the screen, which comes to the same thing: a
 plain Chrome with nothing attached to it, and you at the controls.
 
-![The container's own screen: real Chrome on the Epic store, opened by "Sign in here" inside Docker and captured over VNC by the smoke test - no captcha in sight.](docs/images/05-container-screen.png)
+![The container's own screen: real Chrome on the Epic store, opened by "Sign in here" inside Docker and captured over VNC by the smoke test - no captcha in sight.](docs/images/08-container-screen.png)
 
 The live view above is the other fallback: the account's browser, streamed
 into the page over the browser's own debugging protocol. It is fine for looking
