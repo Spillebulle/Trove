@@ -1,0 +1,21 @@
+# Never build the host's data into an image. It holds live store sessions.
+data/
+*.db
+*.db-wal
+*.db-shm
+.secret_key
+.credential_key
+.env
+.env.local
+
+.git/
+.github/
+**/node_modules/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+frontend/dist/
+backend/app/static/
+docs/
+*.md

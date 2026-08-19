@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Data: the database, the browser profiles, the screenshots and the two
+# generated secrets. Nothing in here may ever reach a commit — a profile
+# directory holds live store session cookies, which are as good as the
+# password.
+data/
+*.db
+*.db-wal
+*.db-shm
+.secret_key
+.credential_key
+
+# Local environment
+.env
+.env.local
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+
+# The built SPA, copied here by the build. The Dockerfile does this itself
+# from the frontend stage, so a committed copy would only ever be stale.
+backend/app/static/
+
+# tsc -b writes this build cache next to the config.
+tsconfig.tsbuildinfo

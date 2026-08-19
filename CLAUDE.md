@@ -1,0 +1,519 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+**Status: v0.1.0. The loop is built and the interface is complete.** Epic
+discovery, the per-account scheduler, the ledger, notifications and the live
+browser view all work and have been driven against the real store. The one part
+that is written but unproven is Epic's *checkout*, because proving it needs a
+signed-in Epic account. See "What is verified and what is not" below, and keep
+that section honest: it is the difference between this file and a wish list.
+
+Keep this file current. When you learn a store's quirk, a Playwright trap, or a
+scheduling rule that is not obvious from the code, write it down here rather
+than in a commit message.
+
+## What this is
+
+A self-hosted service that periodically signs in to the game stores the user
+already has accounts with and claims the games that are temporarily free (the
+weekly Epic giveaway, Prime Gaming's drops, GOG giveaways, occasional Steam
+"free to keep" promotions, EA and Ubisoft freebies). It runs unattended on a
+schedule, keeps a ledger of what it claimed, and has a web UI for adding
+accounts, watching runs and handling the cases it could not finish alone.
+
+Name: **Trove**. The folder is `Trove`, the app calls itself Trove, and the
+mark is three stacked coins.
+
+## The constraint the whole design turns on
+
+**Store logins are hostile to automation, and the app must not fight that.**
+Epic, Amazon and EA all use bot detection (hCaptcha / Arkose / device
+fingerprinting) and will challenge a fresh login, a new IP, or a headless
+browser. The app's answer is *not* to solve challenges. It is:
+
+1. **Sessions, not logins.** Each account gets its own persistent browser
+   profile (cookies, local storage, device fingerprint) and reuses it forever.
+   A healthy account signs in once, by hand, and then never logs in again.
+2. **A manual-attention queue.** When a run hits a captcha, a 2FA prompt, a
+   "verify it's you" email or a changed login flow, it stops, screenshots the
+   page, marks the account `needs attention` with the reason, and notifies. It
+   never guesses, never retries in a loop, and never asks the user for a captcha
+   solving service key.
+3. **Human cadence.** Polite intervals (hours, not minutes), jitter, one store
+   at a time per account. A claimer that hammers a store gets the user's account
+   flagged, which is a far worse outcome than a missed free game.
+
+Corollaries that must survive refactors: no captcha-solving integrations, no
+credential sharing between accounts, no "solve 2FA for me" flows beyond an
+optional user-supplied TOTP secret, and TOTP secrets are treated as secrets at
+rest like everything else. Automating a store login can breach that store's
+terms of service; the app is for the user's own accounts on their own machine,
+and the README should say so plainly rather than pretending otherwise.
+
+## Design
+
+UI follows `../Design-Principles/STYLE-GUIDE.md` and uses its `tokens.css`;
+**accent hue is 310** (orchid: `#AA85C5` dark, `#83609D` light). Hosted web app,
+so `<html class="web">` for the one step up in size (§6.5). Never a raw hex in a
+component.
+
+310 was picked because it collides with no sibling. The hues actually in use,
+read from the files rather than from the guide: Umber 68 (ochre), Tally 255
+(`frontend/src/theme-tally.css`; its copied `tokens.css` still carries the
+default 68, which is overridden and not what ships), HomeLab Manager **349.1**
+(`frontend/static/tokens.css`, a crimson at chroma 0.221 — note the style
+guide's §2.3 still *suggests* 160 sage-teal for it, which is stale), plus
+Umber's shipped user accents Sage 124, Steel 258, Clay 20. 310 is a violet, far
+enough from HomeLab's pink-red to read as a different app at a glance and 55°
+off Tally's blue. It also stays clear of the semantic colours, which
+matters here more than in the other apps: this app's screens are mostly *state*,
+and `good` (sage) / `caution` (clay) / `critical` (muted red) are already spoken
+for by claimed / needs attention / failed. The accent must never be used to mean
+a status; it means selected, in hand, primary (§2.4).
+
+Read the checklist in §16 of the style guide before the first screen ships, and
+§17 before the README.
+
+## The stack
+
+Follow Tally's shape, which is the house pattern for a hosted app in this
+family: FastAPI + SQLAlchemy + SQLite on the backend, React + TypeScript +
+Vite + Tailwind on the frontend, built into one Docker image where the API also
+serves the built SPA. HomeLab Manager is the reference for the pieces Tally does
+not have: the adapter registry, the background poller, Fernet-encrypted
+credentials, single-user cookie auth with a bcrypt password.
+
+Two additions neither sibling has, both now built:
+
+- **Playwright (Python)**, one persistent context per account, profiles under
+  `<DATA_DIR>/profiles/<id>-<slug>`. Headed by default; the container puts up an
+  Xvfb display for it. **Driving real Google Chrome, not the bundled
+  Chromium** - see "The browser has to be real Chrome" below, which is the most
+  important paragraph in this file. `backend/app/browser.py` owns this, including the
+  `asyncio.Lock` per account that stops a scheduled run and the live view
+  opening the same profile at once. **Chromium corrupts a user-data directory
+  two processes have open**, so every path to a profile goes through
+  `manager.session()` and nothing else may launch a browser.
+- **The interactive login path is a CDP screencast, not noVNC.**
+  `backend/app/live.py` attaches a CDP session to the account's page,
+  `Page.startScreencast` streams JPEG frames over a WebSocket, and
+  `Input.dispatch*` sends clicks and keys back. The frontend half is
+  `components/LiveBrowser.tsx`.
+
+  It was chosen over noVNC because Playwright is already speaking CDP: no second
+  process, no second port, no VNC password to get wrong, and the whole feature
+  is two files. The costs are real and worth knowing: it is Chromium-only (the
+  app already was), and it renders one tab rather than a desktop, so a store
+  that opens a popup window would not be visible. Epic does not.
+
+  Three traps, all commented where they happen:
+
+  1. **Frames must be acknowledged.** Chromium sends exactly one more frame per
+     `Page.screencastFrameAck`. Miss it and the live view shows a single still
+     image forever. The ack happens *after* the frame is sent down the socket,
+     which is also what makes the stream self-pacing.
+  2. **Text goes through `Input.insertText`, never synthesised key events.**
+     Reproducing a keydown faithfully means reproducing dead keys, AltGr, phone
+     keyboards and paste. Only the keys with no text (Enter, Tab, Backspace,
+     the arrows) are dispatched as keys. Verified with an umlaut and a tick.
+  3. **The canvas needs somewhere to put the keyboard.** An off-screen textarea
+     takes focus on click; `display: none` cannot hold focus and receives no
+     keys.
+  4. **A mouse move must not carry a button.** `MouseEvent.button` is `-1` on a
+     move where nothing changed, and the first version looked that up in a table
+     of button names with `left` as the default. Chromium derives `buttons` from
+     `button` when the field is absent, so **every pointer movement arrived at
+     the page as `mousemove buttons=1`** - the left button held down for the
+     whole journey across the page - and the press then fired `selectstart`,
+     because the renderer thought a text-selection drag was beginning. Measured
+     by replaying both payload shapes against a page that logs its events.
+
+     Send `buttons` explicitly from the DOM event, resolve a move with nothing
+     held to `none`, and give a move `clickCount: 0`. A challenge that scores
+     pointer behaviour is being shown a drag-then-click otherwise, which is the
+     shape of a bot and not of a person.
+
+## The browser has to be real Chrome
+
+**Playwright's bundled Chromium cannot get past Cloudflare's interactive
+challenge, and no amount of input fidelity changes that.** This cost a session
+to find and is the single most important thing in this file.
+
+The symptom: a person clicks "Verify you are human" in the live view, the
+widget says "Verifying...", and ten seconds later the checkbox comes back
+unticked. Forever. The click is not the problem - it plainly registers.
+
+The cause was visible in the browser console all along:
+
+```
+Failed to parse audio contentType: audio/mp4; codecs=mp4a.40.2
+Failed to parse video contentType: video/mp4; codecs=avc1.42E01E
+Failed to parse video contentType: video/mp4; codecs=hev1.1.6.L93.B0
+```
+
+Turnstile probes for the proprietary codecs. Measured side by side:
+
+| | bundled Chromium | real Chrome |
+|---|---|---|
+| user-agent claims | `Chrome/131.0.6778.33` | `Chrome/151.0.0.0` |
+| `userAgentData.brands` | Chromium, Not_A Brand | **Google Chrome**, Chromium |
+| H.264 / HEVC / AAC | **no, to all of them** | probably |
+
+A browser that says it is Chrome and cannot play what Chrome plays is not
+Chrome, and that contradiction cannot be patched over from inside the page.
+So `config.browser_channel` defaults to `auto`, `browser.resolve_channel()`
+tries `chrome` first and falls back to the bundle with a loud warning, and the
+Dockerfile runs `playwright install chrome`. With Chrome, the same machine and
+the same address that had been challenged repeatedly went straight into the
+store with no interstitial at all.
+
+**Two traps that come with it.**
+
+1. **`--user-data-dir` must be absolute.** Real Chrome *refuses* a relative
+   one: it puts up a modal saying it cannot read and write its own data
+   directory and then hangs, which Playwright reports only as a launch
+   timeout. `DATA_DIR` defaults to `./data` on Windows, so this bites
+   immediately. `settings.profiles_path` resolves, and `session()` resolves
+   again before launching.
+2. **Do not chase this with stealth patches.** The fix was to stop lying about
+   which browser it is, which is the same principle as everything else here:
+   remove the signal, never forge one.
+
+**And real Chrome was still not enough.** With Chrome the codec probes pass and
+the store loads with no interstitial, but where Cloudflare *does* decide to run
+an interactive challenge, the live view still cannot answer it: the next thing
+the widget complained about was `No available adapters.` (WebGPU), and behind
+that there is always another signal, because `cdpDetected` is `true` and a
+screencast cannot exist without the protocol attached. That is structural. Two
+sessions were spent proving it one fingerprint at a time; do not spend a third.
+
+## Signing in without any automation at all
+
+The live view is a **fallback**, not the main way in. It cannot be the main way
+in, because streaming a page requires the DevTools protocol, a page can tell the
+protocol is attached, and a challenge that has decided a browser is automated
+will not accept an answer from it however honestly a person clicks.
+
+So `POST /api/accounts/{id}/sign-in-here` opens the account's profile in an
+**ordinary browser window with nothing attached to it**. `browser.launch_detached`
+starts Chrome as a plain subprocess and Trove then has no connection to it at
+all. Verified by reading the process's own command line back from Windows:
+
+```
+chrome.exe "--user-data-dir=<absolute profile>" --no-first-run --no-default-browser-check <url>
+```
+
+No `--enable-automation`, no `--remote-debugging-port` or `-pipe`, no
+`--headless`, and no `--disable-blink-features` because there is nothing to
+hide. It is a person using Chrome on their own computer, which is exactly what
+it is. When they close the window the process exits, the per-account lock is
+released, and the profile holds the session every later run reuses.
+
+Rules that keep it honest:
+
+- It takes **the same lock** every other path takes (`manager.open_local`), so a
+  scheduled run cannot open the profile while somebody is signing in to it. Two
+  Chromiums sharing a user-data directory corrupt it.
+- The window is **detached**, so restarting Trove does not kill a half-finished
+  sign-in.
+- `GET /api/accounts/{id}/can-sign-in-here` answers whether this is possible at
+  all - headless mode, no Chrome, or no `DISPLAY` all mean no - so the interface
+  can offer the live view instead rather than a button that cannot work.
+- In a container there is no screen, so the live view really is the only option
+  there, and it is worth saying plainly that a captcha may be unanswerable in
+  that deployment. The honest workaround is to sign in on a desktop and copy the
+  profile directory across.
+
+## What Docker can and cannot do
+
+Trove runs in a container, but **the first sign-in usually cannot happen
+there**, and that is a property of the design rather than a bug to fix.
+
+Works in the container: discovery, the scheduler, the ledger, notifications,
+the whole interface, and claim runs on an account whose session is already
+good. That is the unattended half, which is most of the app's life.
+
+Does not work in the container:
+
+- **"Sign in here" is refused**, because it opens a browser window on a screen
+  and the container's only screen is an Xvfb framebuffer nobody is looking at.
+  `settings.has_visible_desktop` is what decides, and it is deliberately not the
+  same question as "is `DISPLAY` set" - the container sets one. Both the button
+  and the endpoint check it; an endpoint that trusts its own UI has no guard.
+- **The live view works but may not be enough.** It can render a captcha and
+  take clicks, and for a store that only wants a password that is fine. For an
+  interactive Cloudflare challenge it is not, for the reasons in the two
+  sections above.
+
+**So the documented path for a container is to sign in on a desktop and carry
+the profile over.** A profile is an ordinary directory:
+
+```
+<DATA_DIR>/profiles/<id>-<slug>/
+```
+
+Copy that directory into the container's volume at the same path, then press
+"Check again" on the account. `runner.check_session` asks the store rather than
+assuming, so a profile that did not survive the trip says so instead of being
+trusted. The id in the directory name must match the account's, which is why
+the name is never re-derived from a renamed label.
+
+Three container-specific things that are easy to get wrong, all now handled:
+
+1. **`--no-sandbox` is added only in a container.** Chrome's setuid sandbox
+   needs user namespaces the default seccomp profile withholds, so without it
+   Chrome does not start - and `resolve_channel` reads that as "Chrome is not
+   usable" and silently falls back to the bundled Chromium, which is exactly the
+   browser that cannot pass a captcha. A silent downgrade to a broken state is
+   the worst shape a failure can take.
+2. **The entrypoint must not need a package the image lacks.** It waited on
+   `xdpyinfo`, which lives in `x11-utils` and is *not* installed by `xvfb`; a
+   missing command returns non-zero forever, so the readiness loop timed out and
+   the entrypoint exited 1. **The container never started.** It now waits on the
+   X socket at `/tmp/.X11-unix/X<n>`, which needs nothing.
+3. **The image installs real Chrome** (`playwright install --with-deps chrome`)
+   for the codec reason above. Without it the container has only the bundle.
+
+**None of this has been run.** There is no Docker on the machine this was
+written on, so the Dockerfile, the entrypoint and the compose file are read and
+reasoned about but never built. The three faults above were found by reading.
+Assume there are more, and treat the first real build as a debugging session
+rather than a deployment.
+
+## Architecture
+
+Four concerns, kept thin, mirroring HomeLab's split. Where each one lives:
+
+| Concern | Files |
+|---|---|
+| HTTP/CRUD | `routers/accounts.py`, `routers/ledger.py`, `routers/settings.py`, `routers/live.py`, `main.py` |
+| Scheduler | `scheduler.py`, and `runner.py` for what one run does |
+| Store adapters | `adapters/base.py` (the contract), `adapters/epic.py`, `adapters/__init__.py` (`ADAPTER_MAP`) |
+| Ledger | `models.py`, and the pages that are views of it |
+| The browser | `browser.py` (profiles and the lock), `live.py` (the screencast) |
+
+- **HTTP/CRUD** — accounts, claims, runs, settings, and the SPA.
+- **Scheduler** — a per-account loop, not a global tick: each account has its own
+  interval and its own last-run time, and one slow store must not delay another
+  account. HomeLab's `poller.py` is the model, including the graceful-shutdown
+  handling of in-flight child tasks. `next_run_at` is **persisted**, not
+  computed from `last_run_at` plus an interval, so a restart cannot re-roll the
+  jitter and bunch every account onto the same minute.
+- **Store adapters** (`adapters/`) — one per store behind a small contract, with a
+  single `ADAPTER_MAP` registration point: `list_free_offers()`, `health(page)`,
+  `is_owned(page, offer)`, `claim(page, offer)`. Every adapter declares what it
+  needs the way HomeLab's adapters declare service requirements, and
+  `/api/accounts/stores` reads that declaration so the add-account page explains
+  itself with no second list to keep in step.
+
+  Two rules for an adapter: it may not import the database, the scheduler or
+  FastAPI, and `is_owned` returns **`None` when it could not tell**, which is a
+  different answer from `False`. Claiming something already owned is harmless;
+  recording "not owned" when the check failed teaches the ledger a lie.
+- **Ledger** — every attempt is a row: account, store, offer, outcome
+  (`claimed` / `already_owned` / `not_eligible` / `needs_attention` / `failed`),
+  timestamp, and the screenshot path when it stopped. The UI is a view of this
+  table; the app never claims a game it cannot show a row for. `Claim.title` is
+  **copied** off the offer rather than joined, so the ledger keeps reading
+  properly after an old offer row is pruned.
+
+The ledger is also the memory that stops a double claim: `runner._already_claimed`
+skips any offer this account already has a `claimed` or `already_owned` row for,
+so a manual run, a scheduled run and a restart cannot combine to claim one thing
+three times.
+
+Discovery and claiming are separate steps, and this is the boundary to defend.
+`runner.discover()` asks the adapter what is free, which for Epic is one request
+to a public endpoint: no browser, no session, no account. A run that finds
+nothing to claim ends there having cost one HTTP request. `POST
+/api/offers/refresh` is the same path, which is why the button in the interface
+is safe to press and says so.
+
+The public feed (`discovery.feed_enabled`) is a setting that exists and is off.
+GamerPower is the obvious candidate and **its terms have not been checked**. If
+it is added: a broken feed must degrade to "check the stores on schedule", not
+to a stopped app.
+
+### Per-store notes
+
+- **Epic Games Store** — built. Discovery is the public `freeGamesPromotions`
+  endpoint and is verified; claiming drives the browser to
+  `store.epicgames.com/purchase?offers=1-<namespace>-<offerId>` rather than
+  clicking "Get" on the product page, because the product page renders the same
+  checkout in a cross-origin iframe and driving that breaks whenever Epic
+  changes the container.
+
+  Three things learned by running it. The `-ipv4` promotions host is deliberate:
+  the plain hostname resolves to an IPv6 address a default Docker network cannot
+  reach, which presents as a hang rather than an error. **Epic serves
+  Cloudflare's interstitial readily**, so the first thing a new account often
+  meets is a challenge rather than a login page; that is the live view's job.
+
+  And **Cloudflare's verdict follows the profile, not just the address.** A
+  fresh profile from this machine was waved straight through to the store with
+  no interaction at all, while an older profile on the same machine and the same
+  address kept being challenged. A profile that has been refused once tends to
+  keep being refused, and answering the challenge again does not clear it -
+  which is what `POST /api/accounts/{id}/reset-profile` exists for. Reach for
+  that before reaching for a stealth plugin.
+- **Prime Gaming** (what the user called Twitch Prime; Twitch Prime was renamed
+  years ago) — needs an active Amazon Prime subscription. Many of its offers are
+  *keys for other stores* (GOG, Epic, Legacy Games) rather than a library add, so
+  the ledger has to be able to record "claimed a key" and show the key to the
+  user. Amazon's login is the most aggressive of the set.
+- **GOG** — occasional giveaways, usually a simple claim on the promo page.
+- **Steam** — has no weekly giveaway; what exists is "free to keep" promotions
+  and free-to-play adds, claimed from the store page. Do not build Steam as if
+  it were Epic. Steam Guard makes an unattended login unrealistic, which is
+  another reason sessions matter more than credentials.
+- **EA (EA app / Origin)** and **Ubisoft Connect** — infrequent giveaways; worth
+  an adapter only after the first two work end to end.
+
+One store, one account, one full loop is done. **A second adapter should still
+wait** until Epic's checkout has claimed something real, because the checkout is
+the only part of the contract no adapter has exercised yet, and a second store
+written against an unproven shape is a second store to rewrite.
+
+## Commands
+
+Verified by running them. The user develops on Windows 11 with PowerShell, so
+the local-dev commands are PowerShell.
+
+```powershell
+# --- First time --------------------------------------------------------------
+python -m venv backend/.venv
+backend/.venv/Scripts/pip install -r backend/requirements.txt
+backend/.venv/Scripts/python -m playwright install chromium
+cd frontend; npm install; cd ..
+
+# --- Local dev, two terminals ------------------------------------------------
+# API on 8080, auto-reloading. DATA_DIR keeps the database, the profiles and the
+# screenshots inside the repo rather than at the drive root, which is where a
+# bare "/data" lands on Windows.
+$env:DATA_DIR="./data"; backend/.venv/Scripts/python -m uvicorn app.main:app --app-dir backend --reload --port 8080
+
+# Vite on 5173, proxying /api (and the live-view WebSocket) to 8080.
+cd frontend; npm run dev
+
+# --- The production layout, without Docker -----------------------------------
+# The API serves the built SPA out of backend/app/static, so a build is a copy.
+cd frontend; npm run build; cd ..
+Remove-Item -Recurse -Force backend/app/static -ErrorAction SilentlyContinue
+Copy-Item -Recurse frontend/dist backend/app/static
+
+# --- Docker ------------------------------------------------------------------
+docker compose up -d --build
+docker compose logs -f trove
+```
+
+**Run uvicorn from the repository root**, not from `backend/`. `.env` and
+`.env.local` are resolved relative to the working directory, so starting it a
+directory down silently ignores them and you get the "changeme" password and no
+CORS origin.
+
+`npm run lint` is `tsc --noEmit`. There is no test suite yet; when there is one,
+put how to run a single test here.
+
+## What is verified and what is not
+
+The honest ledger for this file. Keep it accurate; it is what stops the next
+session trusting something nobody has run.
+
+**Verified against the live service or the running app:**
+
+- Epic's `freeGamesPromotions` endpoint, its shape, and the two-condition
+  filter. Both conditions are needed and the reason is in `adapters/epic.py`:
+  a currently-running promotion can still list a full price, and a zero
+  discount price can belong to *next* week's giveaway.
+- Slugs. Of eleven listed promotions, seven had a null `productSlug` and every
+  one of them had a `catalogNs` mapping, so `_product_url` tries three fields.
+- The live view: frames arrive, a click reaches the remote page, and Epic's
+  Cloudflare "verify you are human" step renders and can be answered.
+- `Input.insertText`, control-key dispatch and screencast acknowledgement,
+  checked directly against a page with a real field.
+- A full run: discovery, browser open, health check, `NeedsAttention` raised on
+  Epic's challenge, run marked `attention`, account marked with a reason and a
+  screenshot, no retry. This is the design working, not failing.
+- Notifications: both payload shapes, the 404 / unreachable / no-URL branches,
+  and that a saved webhook is never returned to the browser.
+- Both themes, and the drawer below 1024px.
+- The mouse bridge, by replaying both payload shapes against a page that logs
+  its own events: moves are hovers, the press produces one trusted click, and no
+  drag or `selectstart` is started.
+- That a *fresh* profile is let through Epic's interstitial where an older one
+  on the same machine is not.
+- **That the bundled Chromium is the reason a captcha could not be answered**,
+  by reading the codec support of both browsers directly, and that with real
+  Chrome the store loads with no interstitial at all. The console lines that
+  gave it away came from the user, not from a test.
+- That real Chrome refuses a relative `--user-data-dir`, from the dialog it
+  puts up before Playwright times out.
+- That the un-driven sign-in window carries **no** automation flags, by reading
+  its command line back out of `Win32_Process` after launching it, and that it
+  writes a usable profile.
+- **The whole sign-in loop, on a real Epic account.** A person signed in through
+  the un-driven window; Playwright-driven Chrome then opened the same profile
+  and `adapter.health` reported the account signed in, so the run scheduled
+  itself. That is the design's central claim - sessions, not logins - working
+  end to end for the first time.
+- That Epic's redirects make `page.goto` raise `net::ERR_ABORTED` on a page that
+  in fact loaded. `adapters/epic._goto` tolerates it; without that, a healthy
+  signed-in account read as a 500.
+
+**Written and NOT verified:**
+
+- **Epic's checkout.** `PLACE_ORDER`, `AGREEMENT`, `CONFIRMED`, `OWNED` and
+  `NOT_ELIGIBLE` in `adapters/epic.py` were written from how the flow is known
+  to work and have never run against a signed-in account. They are all in one
+  table at the top of that file for exactly this reason. The failure mode is
+  safe by construction: anything unrecognised raises `NeedsAttention` with a
+  screenshot rather than clicking something else.
+- **The claim itself, on a real account.** Everything up to the checkout is now
+  proven against a live signed-in session. `PLACE_ORDER`, `AGREEMENT`,
+  `CONFIRMED` and the rest have still never run, so the first real claim is
+  where they get corrected.
+- **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
+  asked for this to be measured and it has not been. Headed is the default as
+  the conservative guess. Measuring it is a good early task and needs a signed-in
+  account to be meaningful.
+- **The Docker image, entirely.** Never built: there is no Docker on this
+  machine. Reading it found three faults that would have bitten (the missing
+  `xdpyinfo`, the sign-in button offering itself in a container, and Chrome
+  needing `--no-sandbox` there), which is a good reason to expect more. Nothing
+  about the container is verified, including whether `gosu` and `usermod` are
+  present in the Playwright base image and whether Chrome starts as `pwuser`.
+- **That the mouse fix makes a Turnstile checkbox pass.** It does not, on its
+  own: the checkbox still looped after it, and the codec fingerprint was the
+  real cause. The defect it fixed was real - every pointer move was arriving as
+  a left-button drag - and the corrected events are proven, so it stays. It is
+  simply not the thing that unblocked the challenge, and the two should not be
+  confused in a commit message.
+- **That the live view can ever pass an interactive challenge.** It could not
+  on the bundled Chromium and there is no reason to think it can on Chrome; the
+  un-driven window exists because of that. If a future session wants to claim
+  otherwise it needs a screenshot of a ticked checkbox, not an argument.
+- **Focus emulation.** `Emulation.setFocusEmulationEnabled` is called for both
+  the live view and runs, and on headed Chromium on Windows it changes nothing
+  measurable: `document.hasFocus()` was already `true` with the window
+  backgrounded and minimised. It is kept for the container case, which has not
+  been measured. It is not the reason anything works.
+
+## Things that will look like shortcuts and are not
+
+- Storing store passwords and logging in on every run. It is the thing bot
+  detection is looking for, and it is what turns a missed claim into a locked
+  account.
+- Running the browser headless because it is easier in Docker. Measure it before
+  relying on it.
+- Retrying a failed claim in a loop. One attempt, then the attention queue.
+- Treating "already owned" as a failure. It is the normal steady state, and the
+  UI should say so quietly rather than in `critical`.
+- Colouring a status with the accent, or filling a selected row with it. §2.4 is
+  a closed list and this app has more status than most.
+- Letting a naive datetime out of the API. SQLite returns every stored datetime
+  without an offset, and `new Date()` reads an offset-less string as *local*
+  time, so a run that just finished read as "2 hours ago" on a UTC+2 machine.
+  `schemas.Read` stamps UTC on the way out; new read models inherit it.
+- Returning a stored secret to the browser "because the form needs it". The
+  webhook comes back as `__set__` and sending that back means "leave it alone".

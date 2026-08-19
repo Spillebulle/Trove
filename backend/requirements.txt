@@ -1,0 +1,19 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+pydantic==2.10.4
+pydantic-settings==2.7.0
+httpx==0.28.1
+bcrypt==4.2.1
+cryptography==44.0.0
+itsdangerous==2.2.0
+python-multipart==0.0.20
+# The whole point of the app. Pinned rather than floated: a browser automation
+# library's minor releases change selector engines and launch flags, and an
+# adapter that stops signing in is indistinguishable from a store that changed
+# its login page. Upgrade deliberately, with an account to test against.
+playwright==1.49.1
+# `zoneinfo` resolves names against the system tz database, which a slim image
+# may not carry, and the schedule's "claim at a polite hour" logic reads local
+# time. Ship the data rather than hope for it.
+tzdata==2026.3

@@ -1,0 +1,146 @@
+import type {
+  Account,
+  AuthStatus,
+  Claim,
+  Offer,
+  Run,
+  SettingsPayload,
+  StoreInfo,
+  Summary,
+  TestResult,
+} from './types'
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+type Query = Record<string, string | number | boolean | null | undefined>
+
+function withQuery(path: string, query?: Query): string {
+  if (!query) return path
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.append(key, String(value))
+    }
+  }
+  const qs = params.toString()
+  return qs ? `${path}?${qs}` : path
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    // The session is a cookie, and a cross-origin dev server will not send it
+    // without this.
+    credentials: 'same-origin',
+    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+    ...init,
+  })
+
+  if (!response.ok) {
+    /*
+     * FastAPI puts the sentence in `detail`, and every error this app raises is
+     * written as a sentence for a person to read. Show that rather than the
+     * status text: "The browser profile is in use by the live view." is an
+     * answer, and "Conflict" is not.
+     */
+    let message = response.statusText || 'Something went wrong.'
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') message = body.detail
+      else if (Array.isArray(body?.detail) && body.detail[0]?.msg) message = body.detail[0].msg
+    } catch {
+      // A non-JSON body is not worth a second failure.
+    }
+    throw new ApiError(message, response.status)
+  }
+
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}
+
+const post = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
+
+export const api = {
+  auth: {
+    status: () => request<AuthStatus>('/api/auth/status'),
+    login: (username: string, password: string) =>
+      post<AuthStatus>('/api/auth/login', { username, password }),
+    logout: () => post<void>('/api/auth/logout'),
+    changePassword: (current_password: string, new_password: string) =>
+      post<void>('/api/auth/password', { current_password, new_password }),
+  },
+
+  summary: () => request<Summary>('/api/summary'),
+
+  accounts: {
+    stores: () => request<StoreInfo[]>('/api/accounts/stores'),
+    list: () => request<Account[]>('/api/accounts'),
+    get: (id: number) => request<Account>(`/api/accounts/${id}`),
+    create: (body: { store: string; label: string; interval_hours?: number | null }) =>
+      post<Account>('/api/accounts', body),
+    update: (id: number, body: Partial<Account> & { totp_secret?: string }) =>
+      patch<Account>(`/api/accounts/${id}`, body),
+    remove: (id: number) => request<void>(`/api/accounts/${id}`, { method: 'DELETE' }),
+    run: (id: number) => post<{ started: boolean }>(`/api/accounts/${id}/run`),
+    clearAttention: (id: number) => post<Account>(`/api/accounts/${id}/clear-attention`),
+    resetProfile: (id: number) => post<Account>(`/api/accounts/${id}/reset-profile`),
+    signInHere: (id: number) => post<Account>(`/api/accounts/${id}/sign-in-here`),
+    checkSession: (id: number) => post<Account>(`/api/accounts/${id}/check-session`),
+    canSignInHere: (id: number) =>
+      request<{ ok: boolean; reason: string | null }>(
+        `/api/accounts/${id}/can-sign-in-here`,
+      ),
+    canOpenLive: (id: number) =>
+      request<{ ok: boolean; reason: string | null }>(`/api/live/${id}/can-open`),
+  },
+
+  offers: {
+    list: (current = true) => request<Offer[]>(withQuery('/api/offers', { current })),
+    refresh: () => post<Offer[]>('/api/offers/refresh'),
+  },
+
+  claims: {
+    list: (query?: { account_id?: number; outcome?: string; limit?: number; offset?: number }) =>
+      request<Claim[]>(withQuery('/api/claims', query as Query)),
+    key: (id: number) =>
+      request<{ key_code: string; key_store: string | null }>(`/api/claims/${id}/key`),
+  },
+
+  runs: {
+    list: (query?: { account_id?: number; limit?: number }) =>
+      request<Run[]>(withQuery('/api/runs', query as Query)),
+  },
+
+  settings: {
+    read: () => request<SettingsPayload>('/api/settings'),
+    write: (values: Record<string, unknown>) => patch<SettingsPayload>('/api/settings', { values }),
+    testNotification: (channel: string, webhook_url?: string) =>
+      post<TestResult>('/api/settings/notify/test', { channel, webhook_url }),
+  },
+
+  screenshotUrl: (name: string) => `/api/screenshots/${encodeURIComponent(name)}`,
+}
+
+/**
+ * The live view's socket URL.
+ *
+ * Built from `location` rather than a configured base, so it follows whatever
+ * host and scheme the page was served from. The scheme swap is the part that
+ * is easy to get wrong: a page on HTTPS must open `wss:`, and a mixed-content
+ * `ws:` is refused by the browser with no error the app can catch.
+ */
+export function liveSocketUrl(accountId: number): string {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${window.location.host}/api/live/${accountId}`
+}

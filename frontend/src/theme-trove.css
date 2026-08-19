@@ -1,0 +1,131 @@
+/*
+ * Trove's layer over the house tokens.
+ *
+ * `tokens.css` beside this file is a verbatim copy of
+ * ../../../Design-Principles/tokens.css and must stay one, so the house ladder
+ * can be re-synced with a single copy. Everything Trove decides for itself is
+ * here, and it is almost nothing:
+ *
+ *   1. `--accent-h: 310`, the one number an app sets.
+ *   2. Two tokens the house file does not carry because only an app knows it
+ *      needs them: the modal scrim, and the danger button's border.
+ *   3. The typeface.
+ *
+ * **The accent is the house formula, unchanged.** At hue 310 `oklch(0.674
+ * 0.101 H)` is #AA85C5 and `oklch(0.55 0.10 H)` is #83609D, which are exactly
+ * the orchids the brief names, so there is nothing to pin and no deviation to
+ * justify. Contrast was measured off the rendered values rather than assumed:
+ * accent on `chrome` is 5.81:1 dark and 4.68:1 light, on `control` 5.33:1 and
+ * 4.13:1, and `accent-ink` on accent 6.13:1 and 5.09:1. Every one clears
+ * STYLE-GUIDE 2.6, with the 3:1 floor for the accent cleared by a wide margin.
+ *
+ * **Why 310 and not a hue nearer a sibling.** It is 55 degrees off Tally's 255
+ * and far from HomeLab's 349.1, so three of these open in three tabs and are
+ * three different apps at a glance. It matters more here than in the siblings
+ * because Trove's screens are mostly *state*: sage, clay and muted red are
+ * already spoken for by claimed, needs attention and failed, and an accent
+ * anywhere near them would read as a fourth status. It is never one:
+ * STYLE-GUIDE 2.4 is a closed list and the accent means selected, in hand,
+ * primary.
+ *
+ * Structure mirrors `tokens.css` exactly and for the same reason: bare `:root`
+ * is dark, the media query is system-light, and `.light` / `[data-theme=light]`
+ * is forced light. A token written in only one of the two light blocks breaks
+ * in the other state, so all three are kept in step.
+ */
+
+:root {
+  /* Orchid. Nothing else in this file changes a colour. */
+  --accent-h: 310;
+}
+
+/* ══ DARK ══════════════════════════════════════════════════════════════════ */
+:root {
+  /*
+   * The dim behind a modal or a drawer.
+   *
+   * STYLE-GUIDE 7.17 says "`backdrop` at 60 % alpha", which is right in the
+   * dark theme where `backdrop` is near-black. In the light theme it is a pale
+   * warm grey over a pale warm grey and dims nothing, so it is drawn from the
+   * *ink* there instead, which is the only dark colour a paper palette has.
+   * That is why this is a token and not an inline alpha at the one call site.
+   */
+  --scrim: color-mix(in oklab, var(--backdrop) 60%, transparent);
+
+  /*
+   * The danger button's border. 7.6 asks for the critical hue at 40 %, and
+   * `--caution` has such a token where `--critical` does not.
+   *
+   * Defined once rather than per theme: a `color-mix` over other variables
+   * resolves where it is *used*, so it follows `--critical` into the light
+   * theme without being restated. Mixed against `--critical-bg`, the fill it is
+   * drawn on, rather than left translucent, because a 1px translucent border on
+   * a rounded element composites as two separately antialiased paths and
+   * renders visibly jagged along the caps.
+   */
+  --critical-line: color-mix(in oklab, var(--critical) 40%, var(--critical-bg));
+
+  /*
+   * The ink inside the app mark. Deliberately *not* `--accent-ink`, which is
+   * near-black in dark and white in light: the mark is one piece of artwork and
+   * has to be the same colour everywhere it appears, or the favicon and the top
+   * bar show two different logos in one window.
+   */
+  --brand-ink: #ffffff;
+}
+
+/* ══ LIGHT, following the system ═══════════════════════════════════════════ */
+@media (prefers-color-scheme: light) {
+  :root:not(.dark):not([data-theme='dark']) {
+    --scrim: color-mix(in oklab, var(--text-strong) 32%, transparent);
+  }
+}
+
+/* ══ LIGHT, chosen ═════════════════════════════════════════════════════════ */
+:root.light,
+:root[data-theme='light'] {
+  --scrim: color-mix(in oklab, var(--text-strong) 32%, transparent);
+}
+
+/* ── Theme specimens ───────────────────────────────────────────────────────
+ *
+ * STYLE-GUIDE 9 asks the theme picker to be cards with a preview, and a
+ * preview of a theme has to show that theme's surfaces. The token tables
+ * cannot do it: `tokens.css` declares the light ladder on `:root` only, so a
+ * subtree cannot be flipped to it, and a component may not name a colour.
+ *
+ * These re-declare five tokens on a subtree, so anything inside drawn with
+ * `bg-backdrop`, `bg-chrome`, `border-line`, `text-strong` or `bg-accent`
+ * renders in the named theme whatever the page is set to. Five, not the whole
+ * ladder: this is a specimen of a theme, not a theme, and a second full copy of
+ * the table is a table nobody keeps in step.
+ */
+.sample-dark {
+  --backdrop: oklch(0.164 0.005 264);
+  --chrome: oklch(0.209 0.004 264);
+  --line: oklch(0.276 0.006 258);
+  --text-strong: oklch(0.928 0.003 265);
+  --accent: oklch(0.674 0.101 var(--accent-h));
+}
+
+.sample-light {
+  --backdrop: oklch(0.908 0.01 82);
+  --chrome: oklch(0.971 0.006 85);
+  --line: oklch(0.89 0.01 82);
+  --text-strong: oklch(0.342 0.004 68);
+  --accent: oklch(0.55 0.1 var(--accent-h));
+}
+
+/* ── The house typeface ────────────────────────────────────────────────────
+ * Archivo, variable 100-900, width axis pinned to normal and subset to Latin
+ * (42 kB). Bundled, never a CDN: the app is self-hosted, often on a machine
+ * with no route to the internet beyond the stores it claims from, and a font
+ * that arrives late reflows every dense row.
+ */
+@font-face {
+  font-family: 'Archivo';
+  src: url('./assets/fonts/archivo-variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

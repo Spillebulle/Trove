@@ -1,0 +1,32 @@
+services:
+  trove:
+    image: trove:latest
+    build: .
+    container_name: trove
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # The database, the browser profiles, the screenshots and the two
+      # generated secrets. Back this up and you have backed up your sessions;
+      # lose it and every account has to sign in by hand again.
+      - ./data:/data
+    environment:
+      # Set this before the first start. Left blank it is "changeme" and the
+      # log says so. This password guards live store sessions.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Match the owner of ./data on the host: run `id -u` and `id -g`.
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ:-Europe/Oslo}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Chromium wants more than the 64 MB of /dev/shm Docker gives by default.
+    # Below about 512 MB it crashes part-way through a heavy store page, which
+    # presents as a claim that fails for no reason on some games and not others.
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

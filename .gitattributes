@@ -1,0 +1,19 @@
+# Normalise to LF in the repository; let Git decide the working copy.
+* text=auto
+
+# These MUST be LF whatever the developer's platform does.
+#
+# A shell script committed with CRLF fails in a Linux container with
+# "bad interpreter: /bin/sh^M", which reads as a broken image rather than as a
+# line-ending problem. The entrypoint is the one file where getting this wrong
+# stops the container booting, so it is stated rather than left to autocrlf.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary: never touched, never diffed as text.
+*.png binary
+*.woff2 binary
+*.ico binary

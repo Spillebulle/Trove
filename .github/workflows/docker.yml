@@ -1,0 +1,104 @@
+name: Build and publish the image
+
+# Publishes to GHCR: ghcr.io/<owner>/trove
+#
+#   push to main       -> :main and :sha-<commit>, so the Linux box can always
+#                         pull the current tip without waiting for a release
+#   push of a v* tag   -> :0.1.0, :0.1, :latest
+#   pull request       -> builds only, never pushes
+#
+# `workflow_dispatch` is here because the first build of an image that has
+# never run is a debugging session, and re-running it from the Actions tab
+# without inventing a commit is worth the four lines.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required to push to GHCR with the automatic GITHUB_TOKEN. Without it the
+      # build succeeds and the push 403s, which is a slow way to learn this.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Buildx for the cache backend below. Not for cross-building: see the
+      # single-platform note on the build step.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GHCR
+        # A pull request from a fork has no write token, so signing in would
+        # fail on a step that only exists to enable a push that is not going to
+        # happen.
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=Trove
+            org.opencontainers.image.description=Claims the games that are temporarily free, on your own store accounts
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # ── linux/amd64 only, deliberately ──────────────────────────────
+          #
+          # The image installs **real Google Chrome**, and Google does not ship
+          # Chrome for Linux on arm64 - there is no arm64 .deb, only Chromium.
+          # So an arm64 build would either fail at `playwright install chrome`
+          # or, if that were made non-fatal, produce an image silently running
+          # the bundled Chromium, which is exactly the browser that cannot get
+          # past a captcha (see CLAUDE.md, "The browser has to be real Chrome").
+          #
+          # An image that quietly cannot do the thing the app exists for is
+          # worse than no image, so this fails loudly on arm64 instead. If arm64
+          # is ever wanted, it needs its own decision about that limitation
+          # rather than a platform added to this line.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The Playwright base image is about 1.8 GB and the npm and pip layers
+          # are slow. GitHub's cache makes a no-op rebuild minutes rather than
+          # tens of minutes.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Say where it went
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### Image published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Packages are private by default. Make it public under" >> "$GITHUB_STEP_SUMMARY"
+          echo "Packages > trove > Package settings, or \`docker login ghcr.io\` first." >> "$GITHUB_STEP_SUMMARY"

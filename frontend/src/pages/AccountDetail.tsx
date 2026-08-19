@@ -1,0 +1,563 @@
+/*
+ * One account: its state, the live view, its settings, and its own history.
+ *
+ * This is the page the whole app funnels to when something needs a person, so
+ * the attention notice is at the top with the two things that answer it side by
+ * side: open the browser, and say it is fixed. Everything else is below.
+ */
+import { useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ExternalLink, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
+import { api } from '@/lib/api'
+import { useToast } from '@/lib/app-context'
+import {
+  ACCOUNT_STATUS_LABEL,
+  ACCOUNT_STATUS_TONE,
+  OUTCOME_LABEL,
+  OUTCOME_TONE,
+  RUN_STATUS_LABEL,
+  RUN_STATUS_TONE,
+  duration,
+  everyHours,
+  fullTime,
+  relativeTime,
+} from '@/lib/utils'
+import { LiveBrowser } from '@/components/LiveBrowser'
+import {
+  ConfirmDialog,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Field,
+  PageHeader,
+  Panel,
+  Spinner,
+  StatusBadge,
+  Toggle,
+} from '@/components/ui'
+
+export function AccountDetail() {
+  const { id } = useParams()
+  const accountId = Number(id)
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { push } = useToast()
+
+  const [liveOpen, setLiveOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+
+  const account = useQuery({
+    queryKey: ['account', accountId],
+    queryFn: () => api.accounts.get(accountId),
+    // While a run or a live session is on, the state on this page changes
+    // without the user doing anything, so it is polled. Ten seconds is a
+    // compromise: fast enough that "Running" does not linger after a run ends,
+    // slow enough that the page is not a request generator left open all day.
+    refetchInterval: 10_000,
+  })
+  const runs = useQuery({
+    queryKey: ['runs', accountId],
+    queryFn: () => api.runs.list({ account_id: accountId, limit: 10 }),
+    refetchInterval: 10_000,
+  })
+  const claims = useQuery({
+    queryKey: ['claims', accountId],
+    queryFn: () => api.claims.list({ account_id: accountId, limit: 25 }),
+  })
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['account', accountId] })
+    void queryClient.invalidateQueries({ queryKey: ['accounts'] })
+    void queryClient.invalidateQueries({ queryKey: ['summary'] })
+  }
+
+  const runNow = useMutation({
+    mutationFn: () => api.accounts.run(accountId),
+    onSuccess: () => {
+      push('The run has started. It takes a minute or two.', 'neutral')
+      refresh()
+      void queryClient.invalidateQueries({ queryKey: ['runs', accountId] })
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const clearAttention = useMutation({
+    mutationFn: () => api.accounts.clearAttention(accountId),
+    onSuccess: () => {
+      push('Marked as sorted. The next run will be the real test.', 'good')
+      refresh()
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const update = useMutation({
+    mutationFn: (body: Parameters<typeof api.accounts.update>[1]) =>
+      api.accounts.update(accountId, body),
+    onSuccess: refresh,
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  // Can this machine put a browser window on a screen? Answered by the server,
+  // because only it knows whether it is in a container.
+  const localSignIn = useQuery({
+    queryKey: ['can-sign-in-here', accountId],
+    queryFn: () => api.accounts.canSignInHere(accountId),
+    staleTime: 5 * 60_000,
+  })
+
+  const signInHere = useMutation({
+    mutationFn: () => api.accounts.signInHere(accountId),
+    onSuccess: () => {
+      push('A browser window is opening. Sign in, then close it.', 'good')
+      refresh()
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const checkSessionNow = useMutation({
+    mutationFn: () => api.accounts.checkSession(accountId),
+    onSuccess: (account) => {
+      push(
+        account.status === 'ok'
+          ? 'Signed in. Trove can take it from here.'
+          : account.status_reason ?? 'Still signed out.',
+        account.status === 'ok' ? 'good' : 'neutral',
+      )
+      refresh()
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const resetProfile = useMutation({
+    mutationFn: () => api.accounts.resetProfile(accountId),
+    onSuccess: () => {
+      setConfirmReset(false)
+      push('Fresh browser profile. Sign in again in the live view.', 'good')
+      refresh()
+    },
+    onError: (error: Error) => {
+      setConfirmReset(false)
+      push(error.message, 'critical')
+    },
+  })
+
+  const remove = useMutation({
+    mutationFn: () => api.accounts.remove(accountId),
+    onSuccess: () => {
+      push('The account and its signed-in session are gone.', 'neutral')
+      void queryClient.invalidateQueries({ queryKey: ['accounts'] })
+      navigate('/accounts')
+    },
+    onError: (error: Error) => {
+      setConfirmDelete(false)
+      push(error.message, 'critical')
+    },
+  })
+
+  if (account.isError) {
+    return <ErrorState error={account.error} onRetry={() => void account.refetch()} />
+  }
+  if (!account.data) {
+    return <div className="card skeleton h-40" />
+  }
+
+  const data = account.data
+  const busy = Boolean(data.busy_with)
+  const needsSignIn = data.status === 'never_signed_in'
+  const needsHand = data.status === 'needs_attention'
+
+  return (
+    <>
+      <PageHeader
+        title={data.label}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-2">
+            <StatusBadge
+              tone={ACCOUNT_STATUS_TONE[data.status]}
+              label={ACCOUNT_STATUS_LABEL[data.status]}
+            />
+            <span className="text-dim">
+              {data.enabled ? everyHours(data.effective_interval_hours) : 'Paused'}
+            </span>
+          </span>
+        }
+        actions={
+          <>
+            {/*
+             * The primary way in, where the machine can manage it. It opens an
+             * ordinary browser window with no automation attached, which is the
+             * only thing a store's challenge will reliably accept an answer
+             * from. The live view stays for the container case and is offered
+             * beside it rather than instead of it.
+             */}
+            {localSignIn.data?.ok && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => signInHere.mutate()}
+                disabled={busy || signInHere.isPending}
+                title={
+                  busy
+                    ? `The browser profile is in use by ${data.busy_with}.`
+                    : 'Open this account in a normal browser window on this machine.'
+                }
+              >
+                {signInHere.isPending ? <Spinner /> : <ExternalLink className="size-icon" />}
+                Sign in here
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setLiveOpen(true)}
+              disabled={busy}
+              // A control that lies is worse than none: when the profile is
+              // held, the button says so rather than opening a window that
+              // closes itself.
+              title={
+                busy
+                  ? `The browser profile is in use by ${data.busy_with}.`
+                  : 'Open this account in a real browser.'
+              }
+            >
+              <Monitor className="size-icon" />
+              Live view
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => runNow.mutate()}
+              disabled={runNow.isPending || busy || needsSignIn}
+              title={
+                needsSignIn
+                  ? 'Sign in to this account first. Trove has no password to sign in with.'
+                  : busy
+                    ? `The browser profile is in use by ${data.busy_with}.`
+                    : 'Check this account for free games now.'
+              }
+            >
+              {runNow.isPending ? <Spinner /> : <Play className="size-icon" />}
+              Run now
+            </button>
+          </>
+        }
+      />
+
+      {/*
+       * Where Trove has no screen of its own - a container, most often - the
+       * live view is all there is, and it may not be enough: a store that puts
+       * up an interactive captcha can refuse a browser it can tell is driven.
+       * Saying so here is better than letting somebody discover it during a
+       * sign-in that will not complete.
+       */}
+      {(needsSignIn || needsHand) && localSignIn.data && !localSignIn.data.ok && (
+        <div className="notice mb-4">
+          <p>
+            {localSignIn.data.reason} A captcha may refuse the live view. The
+            reliable way is to sign in on a desktop and copy that account&rsquo;s
+            folder from <span className="keycap">data/profiles/</span> into this
+            machine&rsquo;s, then press Check again.
+          </p>
+        </div>
+      )}
+
+      {(needsSignIn || needsHand) && (
+        <div className="notice mb-4 flex flex-wrap items-center gap-3">
+          <p className="min-w-0 flex-1">
+            {data.status_reason ??
+              (localSignIn.data?.ok
+                ? 'This account has not signed in yet. Open a browser window, sign in by hand, then close it. Trove takes it from there.'
+                : 'This account has not signed in yet. Open the live view, sign in by hand, and Trove takes it from there.')}
+          </p>
+          {localSignIn.data?.ok ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => signInHere.mutate()}
+              disabled={busy || signInHere.isPending}
+            >
+              {signInHere.isPending ? <Spinner /> : null}
+              Open a browser window
+            </button>
+          ) : (
+            <button type="button" className="btn-secondary" onClick={() => setLiveOpen(true)}>
+              Open the live view
+            </button>
+          )}
+          {/* Normally the sign-in window closing checks this by itself. The
+              button is for when nothing was watching: Trove restarted while the
+              window was open, or the profile was signed in some other way. */}
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => checkSessionNow.mutate()}
+            disabled={busy || checkSessionNow.isPending}
+            title="Ask the store whether this account is signed in now."
+          >
+            {checkSessionNow.isPending ? <Spinner /> : null}
+            Check again
+          </button>
+          {needsHand && (
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => clearAttention.mutate()}
+              disabled={clearAttention.isPending}
+            >
+              I have sorted it
+            </button>
+          )}
+        </div>
+      )}
+
+      {data.status_screenshot && (
+        <Panel title="What Trove saw" className="mb-4">
+          <p className="mb-2 text-small text-dim">
+            The page as it was when the run stopped, {relativeTime(data.status_at)}.
+          </p>
+          <a
+            href={api.screenshotUrl(data.status_screenshot)}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="art block w-full"
+            title="Open the full screenshot."
+          >
+            <img
+              src={api.screenshotUrl(data.status_screenshot)}
+              alt="The store page as it was when the run stopped."
+              className="w-full"
+            />
+          </a>
+        </Panel>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Settings">
+          <div className="flex flex-col">
+            <Toggle
+              label="Check this account"
+              description="When off, the schedule skips it. You can still run it by hand."
+              checked={data.enabled}
+              onChange={(enabled) => update.mutate({ enabled })}
+            />
+            <div className="border-t border-line-soft pt-3">
+              <Field
+                label="How often"
+                hint={`Hours between runs. Leave empty to use the default, which is ${data.effective_interval_hours}.`}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  className="field"
+                  defaultValue={data.interval_hours ?? ''}
+                  placeholder={String(data.effective_interval_hours)}
+                  onBlur={(event) => {
+                    const raw = event.target.value.trim()
+                    const value = raw === '' ? null : Number(raw)
+                    if (value !== data.interval_hours) update.mutate({ interval_hours: value })
+                  }}
+                />
+              </Field>
+            </div>
+            {/* Two sentences rather than one with a hole in it: with no
+                scheduled run, `relativeTime` returns the en dash it uses for
+                "no value", and "Next run – is not scheduled." reads as a
+                missing word rather than as an answer. */}
+            <p className="mt-3 text-small text-dim">
+              {data.next_run_at
+                ? `Next run ${relativeTime(data.next_run_at)}.`
+                : 'No run is scheduled yet.'}{' '}
+              Trove spreads runs a little either side of the interval so they do
+              not land on the same minute every day.
+            </p>
+          </div>
+        </Panel>
+
+        <Panel title="Runs" count={runs.data?.length} bodyClassName="p-0">
+          {(runs.data?.length ?? 0) === 0 ? (
+            <EmptyState
+              title="No runs yet"
+              description="Every visit Trove makes to the store is listed here, with what it found."
+            />
+          ) : (
+            <ul className="divide-y divide-line-soft">
+              {(runs.data ?? []).map((run) => (
+                <li key={run.id} className="px-strip py-2">
+                  <div className="flex items-center gap-2">
+                    <StatusBadge
+                      tone={RUN_STATUS_TONE[run.status]}
+                      label={RUN_STATUS_LABEL[run.status]}
+                    />
+                    <span className="text-small text-dim">
+                      {run.trigger === 'manual' ? 'By hand' : 'Scheduled'}
+                    </span>
+                    <span
+                      className="figure ml-auto text-tiny text-dim"
+                      title={fullTime(run.started_at)}
+                    >
+                      {relativeTime(run.started_at)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-small text-dim">
+                    {run.message ?? (
+                      <>
+                        <span className="figure">{run.offers_seen}</span> free,{' '}
+                        <span className="figure">{run.claimed}</span> claimed,{' '}
+                        <span className="figure">{run.already_owned}</span> already owned, in{' '}
+                        {duration(run.duration_s)}.
+                      </>
+                    )}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Ledger" className="mt-4" count={claims.data?.length} bodyClassName="p-0">
+        {(claims.data?.length ?? 0) === 0 ? (
+          <EmptyState
+            title="Nothing attempted yet"
+            description="Every attempt on this account lands here, whatever came of it."
+          />
+        ) : (
+          <ul className="divide-y divide-line-soft">
+            {(claims.data ?? []).map((claim) => (
+              <li key={claim.id} className="flex items-center gap-3 px-strip py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-control text-fg">{claim.title}</span>
+                  {claim.detail && (
+                    <span className="block truncate text-small text-dim">{claim.detail}</span>
+                  )}
+                </span>
+                <StatusBadge
+                  tone={OUTCOME_TONE[claim.outcome]}
+                  label={OUTCOME_LABEL[claim.outcome]}
+                />
+                <span
+                  className="figure hidden w-24 shrink-0 text-right text-tiny text-dim sm:block"
+                  title={fullTime(claim.created_at)}
+                >
+                  {relativeTime(claim.created_at)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      {/*
+       * Resetting the profile is not in the danger zone, and that is a
+       * judgement rather than an oversight: it is the fix for a store that
+       * keeps asking the same question, so somebody who needs it needs to find
+       * it while they are annoyed, not after they have read to the bottom of
+       * the page. It still confirms, because the session is real work to
+       * replace.
+       */}
+      <Panel title="Browser profile" className="mt-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="min-w-0 flex-1 text-body text-dim">
+            The signed-in session for this account lives in its own browser
+            profile. If the store keeps showing the same challenge however many
+            times you answer it, the profile itself has been flagged, and a
+            fresh one is usually let straight through.
+          </p>
+          <button
+            type="button"
+            className="btn-outline"
+            onClick={() => setConfirmReset(true)}
+            disabled={busy}
+            title={
+              busy
+                ? `The browser profile is in use by ${data.busy_with}.`
+                : 'Throw away this profile and start a fresh one.'
+            }
+          >
+            <RefreshCw className="size-icon" />
+            Start a fresh profile
+          </button>
+        </div>
+      </Panel>
+
+      <div className="mt-6">
+        <p className="eyebrow mb-2">Danger</p>
+        <div className="card flex flex-wrap items-center gap-3 p-strip">
+          <p className="min-w-0 flex-1 text-body text-dim">
+            Deleting this account removes its ledger and its signed-in browser
+            profile. You would have to sign in to the store by hand again.
+          </p>
+          <button type="button" className="btn-danger" onClick={() => setConfirmDelete(true)}>
+            <Trash2 className="size-icon" />
+            Delete this account
+          </button>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => resetProfile.mutate()}
+        busy={resetProfile.isPending}
+        title="Start a fresh browser profile?"
+        consequence="This account is signed out of the store and its cookies are deleted, so you have to sign in again by hand in the live view. Its ledger, its name and its schedule are kept, and nothing you have already claimed is affected."
+        confirmLabel="Start a fresh profile"
+      />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => remove.mutate()}
+        busy={remove.isPending}
+        title={`Delete ${data.label}?`}
+        consequence="Its ledger rows and its signed-in browser profile are deleted. Trove cannot sign back in on its own, so you would have to do it by hand. Nothing you have already claimed on the store is affected."
+        confirmLabel="Delete the account"
+      />
+
+      {/*
+       * The live view is a large dialog rather than its own page, and that is
+       * deliberate: it is a thing you do *to* this account and come back from,
+       * and a route would let somebody bookmark a browser session.
+       *
+       * It refuses to close while the socket is up, through `busy`, so a
+       * stray Escape in the middle of typing a password does not take the
+       * window away mid-sign-in.
+       */}
+      <Dialog
+        open={liveOpen}
+        onClose={() => {
+          setLiveOpen(false)
+          refresh()
+        }}
+        title={`${data.label} in a browser`}
+        subtitle="Sign in, or answer what the store is asking. Trove keeps the session."
+        size="large"
+        footerNote={
+          <a
+            href="https://store.epicgames.com/"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1.5 hover:text-fg"
+          >
+            <ExternalLink size={12} />
+            The store, in your own browser
+          </a>
+        }
+      >
+        <div className="h-[60vh] min-h-[380px]">
+          {liveOpen && (
+            <LiveBrowser
+              accountId={accountId}
+              onClose={() => {
+                setLiveOpen(false)
+                refresh()
+              }}
+            />
+          )}
+        </div>
+      </Dialog>
+    </>
+  )
+}

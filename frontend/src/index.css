@@ -1,0 +1,373 @@
+/*
+ * Trove's stylesheet.
+ *
+ *   tokens.css       the house ladder, verbatim. Never edited here.
+ *   theme-trove.css  the accent hue, two derived tokens, the font.
+ *   this file        the painted controls, as component classes.
+ *
+ * The rule the whole file exists to keep: a component names a *role*, never a
+ * colour, a size or a shadow. If a class below is missing something, add the
+ * class here rather than reaching for an arbitrary value at the call site.
+ */
+@import './tokens.css';
+@import './theme-trove.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    background: var(--backdrop);
+  }
+
+  body {
+    @apply bg-backdrop font-sans text-body text-fg antialiased;
+  }
+
+  /* Keyboard focus is visible everywhere; pointer focus stays quiet. */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-ring);
+    border-radius: var(--r-ctl);
+  }
+
+  ::selection {
+    background: var(--accent-tint);
+  }
+
+  ::placeholder {
+    color: var(--placeholder);
+  }
+
+  /* 6px, quiet, and the same in every scroll area. */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-popover);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* ── Type roles ──────────────────────────────────────────────────────── */
+
+  /*
+   * Every number that is read as a value: a count, an interval, a time, a
+   * duration. Monospaced and tabular so a column lines up and a figure does not
+   * jitter as it changes. There are a lot of these in this app.
+   */
+  .figure {
+    @apply font-mono tabular-nums;
+  }
+
+  /* A section label inside a list or a sidebar. The one place we shout. */
+  .eyebrow {
+    @apply text-eyebrow font-normal uppercase text-placeholder;
+  }
+
+  /* ── Surfaces ────────────────────────────────────────────────────────── */
+
+  .card {
+    @apply rounded-card border border-line bg-chrome;
+  }
+
+  .panel {
+    @apply overflow-hidden rounded-card border border-line bg-chrome;
+  }
+
+  .panel-head {
+    @apply flex h-panelhead items-center gap-2 border-b border-line px-strip;
+  }
+
+  .panel-title {
+    @apply text-heading font-semibold text-strong;
+  }
+
+  .panel-body {
+    @apply p-strip;
+  }
+
+  /* An inset region inside a panel: a list, a preview, a log. */
+  .well {
+    @apply rounded-tool border border-line bg-window;
+  }
+
+  /* ── Buttons ─────────────────────────────────────────────────────────── */
+
+  /*
+   * A disabled control is at 45 % and carries a tooltip saying why (7.6).
+   *
+   * Deliberately *without* `disabled:pointer-events-none`: no pointer events
+   * means no hover, which means the browser never shows the `title`, and every
+   * explanation on the page becomes decorative. A disabled button still
+   * receives `mouseover`, and the `disabled` attribute is what refuses the
+   * click, so nothing needed pointer events removed to be safe. Every hover is
+   * therefore gated on `enabled:`.
+   */
+  .btn {
+    @apply inline-flex h-button select-none items-center justify-center gap-2 rounded-ctl
+           px-3 text-control transition-colors duration-hover ease-ease
+           disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  /* At most one visible per view. It is the one thing to do here. */
+  .btn-primary {
+    @apply btn bg-accent font-semibold text-accent-ink enabled:hover:brightness-110;
+  }
+
+  .btn-secondary {
+    @apply btn bg-control text-fg enabled:hover:bg-control-hover;
+  }
+
+  /* For use inside a well or on `dock`, where a filled button would vanish. */
+  .btn-outline {
+    @apply btn border border-line bg-transparent text-fg enabled:hover:border-line-dashed;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-muted enabled:hover:text-strong;
+  }
+
+  /* Destructive. Always paired with a sentence saying what is lost. */
+  .btn-danger {
+    @apply btn border border-critical-line bg-critical-bg text-critical enabled:hover:brightness-110;
+  }
+
+  /* Icon-only. Always tooltipped: an icon without a label is a guess. */
+  .btn-icon {
+    @apply inline-grid h-button w-button place-items-center rounded-ctl text-muted
+           transition-colors duration-hover ease-ease enabled:hover:bg-control-hover
+           enabled:hover:text-strong disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  /* ── Fields ──────────────────────────────────────────────────────────── */
+
+  .field {
+    @apply h-field w-full rounded-tool border border-line bg-field px-3 text-control
+           text-fg placeholder:text-placeholder focus:border-accent focus:outline-none;
+  }
+
+  /* A multi-line field keeps the field's look and loses its fixed height. */
+  .field-area {
+    @apply w-full rounded-tool border border-line bg-field px-3 py-2 text-control
+           text-fg placeholder:text-placeholder focus:border-accent focus:outline-none;
+  }
+
+  /* ── Chips, badges, keycaps ──────────────────────────────────────────── */
+
+  /*
+   * A chip is a read-only figure, not a control: a `dock` pill with a label in
+   * `text-dim` and a value in `text`. It never opens anything. The family's
+   * filled pill means "not a control".
+   */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-ctl border border-line bg-dock
+           px-2 py-1 text-tiny text-fg;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-tight bg-control px-1.5 py-px
+           text-tiny text-muted;
+  }
+
+  .badge-good {
+    @apply badge bg-good-bg text-good;
+  }
+
+  .badge-caution {
+    @apply badge bg-caution-bg text-caution;
+  }
+
+  .badge-critical {
+    @apply badge bg-critical-bg text-critical;
+  }
+
+  .keycap {
+    @apply inline-flex items-center rounded-tight border border-line bg-control px-1.5
+           py-px font-mono text-tiny text-fg;
+  }
+
+  /* ── Rows ────────────────────────────────────────────────────────────── */
+
+  /*
+   * The selected state of the whole family: a raised *neutral* fill and strong
+   * text, plus a small accent mark where one is needed. Never an accent
+   * background - that is what keeps the accent scarce enough to still mean
+   * something, which matters here more than in most apps because this one is
+   * mostly status.
+   */
+  .row {
+    @apply flex h-row items-center gap-2 rounded-ctl px-strip text-control text-muted
+           transition-colors duration-hover ease-ease hover:bg-control-hover;
+  }
+
+  .row-selected {
+    @apply bg-control text-strong;
+  }
+
+  .nav-row {
+    @apply relative flex h-nav items-center gap-2.5 rounded-ctl px-strip text-control
+           text-muted transition-colors duration-hover ease-ease
+           hover:bg-control-hover hover:text-fg;
+  }
+
+  .nav-row-selected {
+    @apply bg-control text-strong before:absolute before:left-0 before:top-1/2
+           before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full
+           before:bg-accent before:content-[''];
+  }
+
+  /* A table that is a list with columns (7.16): header in `text-dim`, hairline
+     between rows, figures right-aligned and mono, no zebra, no vertical rules. */
+  .table-head {
+    @apply border-b border-line text-left text-tiny font-normal text-dim;
+  }
+
+  .table-row {
+    @apply border-b border-line-soft transition-colors duration-hover last:border-0
+           hover:bg-control-hover;
+  }
+
+  /* ── Popovers ────────────────────────────────────────────────────────── */
+
+  .menu {
+    @apply rounded-card border border-line-popover bg-popover p-[5px] shadow-menu;
+  }
+
+  .menu-item {
+    @apply flex w-full items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-small text-fg
+           transition-colors duration-hover hover:bg-control-hover;
+  }
+
+  .tooltip {
+    @apply pointer-events-none rounded-tool border border-line bg-popover px-2 py-1
+           text-tiny text-fg shadow-menu;
+  }
+
+  .dialog {
+    @apply rounded-modal border border-line-popover bg-chrome shadow-modal;
+  }
+
+  /* The dim behind a modal: the page at ~40 % (7.17). A class rather than an
+     inline style, because a second thing that dims the page must dim it by the
+     same amount - two alphas read as two depths. */
+  .dialog-backdrop {
+    background: var(--scrim);
+  }
+
+  .floating {
+    @apply rounded-modal border border-line-popover shadow-float;
+    background: color-mix(in oklab, var(--chrome) 96%, transparent);
+    backdrop-filter: blur(6px);
+  }
+
+  /* ── Notices ─────────────────────────────────────────────────────────── */
+
+  .notice {
+    @apply rounded-tool border border-caution-line bg-caution-bg px-3 py-2 text-body text-fg;
+  }
+
+  .notice-critical {
+    @apply rounded-tool border border-critical-line bg-critical-bg px-3 py-2 text-body text-fg;
+  }
+
+  /* ── Structure ───────────────────────────────────────────────────────── */
+
+  /*
+   * Dashed means "a place something is going": a drop target, an empty slot,
+   * an add-new card. Solid means "a thing that is here". Never decoration, and
+   * never a selected state.
+   */
+  .dashed {
+    border-style: dashed;
+    border-color: var(--line-dashed);
+  }
+
+  .scroll-x {
+    @apply overflow-x-auto overscroll-x-contain;
+  }
+
+  /* ── Artwork ─────────────────────────────────────────────────────────── */
+
+  /*
+   * A picture of the thing itself (7.21). In this app that is the offer's own
+   * store art, which is the only picture Trove has and the only thing on a
+   * page of status that is worth looking at.
+   *
+   * The box is a `control` block at the picture's own size, so the layout does
+   * not move when the image arrives and an offer with no art is a block the
+   * same size as its siblings rather than a gap. Size comes from the ladder
+   * (`w-art-card`, `w-art-tile`) and shape from `aspect-wide`; there is no size
+   * in this class on purpose.
+   */
+  .art {
+    @apply relative overflow-hidden rounded-art bg-control;
+  }
+
+  /*
+   * Text laid along the bottom of a picture. Black in both themes: a picture
+   * carries its own contrast and a pale scrim over it erases the picture rather
+   * than the text.
+   */
+  .scrim-art {
+    background-image: var(--scrim-art);
+  }
+
+  /*
+   * The offer grid: one size of card, as many columns as fit.
+   *
+   * Reflow, not breakpoints. A wide screen gets more columns, never bigger
+   * cards (6.4), and the floor is the artwork ladder's card rung. The
+   * `min(..., 100%)` keeps a single column from overflowing a narrow phone
+   * rather than being a second size.
+   */
+  .offer-grid {
+    display: grid;
+    gap: var(--s3);
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--art-card), 100%), 1fr));
+  }
+}
+
+@layer utilities {
+  /* Skeletons stand in for content at the same geometry, with a slow shimmer.
+     The one thing that pulses. */
+  .skeleton {
+    @apply relative overflow-hidden bg-control;
+  }
+
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background-image: linear-gradient(
+      to right,
+      transparent,
+      color-mix(in oklab, var(--text) 8%, transparent),
+      transparent
+    );
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

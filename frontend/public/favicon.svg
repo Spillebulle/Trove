@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!--
+    The app mark, as the tab icon. The same shape and the same ink as
+    components/Brand.tsx: a mark is one piece of artwork, and a favicon that
+    differs from the top bar shows two logos in one window.
+
+    The accent is written as a hex rather than a token because an SVG loaded as
+    a favicon has no page to inherit custom properties from. #AA85C5 is what
+    oklch(0.674 0.101 310) resolves to, which is the dark theme's accent; a
+    favicon is drawn on the browser's chrome rather than on the app, so it takes
+    one value in both themes.
+  -->
+  <rect width="32" height="32" rx="4" fill="#AA85C5"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="16" cy="10" rx="8" ry="3.4"/>
+    <path d="M8 10v6.5c0 1.9 3.6 3.4 8 3.4s8-1.5 8-3.4V10"/>
+    <path d="M8 16.5V23c0 1.9 3.6 3.4 8 3.4s8-1.5 8-3.4v-6.5"/>
+  </g>
+</svg>

@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  `class="web"` is the hosted-web scale (STYLE-GUIDE 6.5). Trove is read in a
+  browser tab rather than at arm's length in a desktop tool, so `tokens.css`
+  swaps one table of sizes for another: 52px top bar, 32px buttons and fields,
+  38px nav rows, 14px body. It is a scale and nothing else - same colours, same
+  hairlines, same shadows, same rules about the accent - and it is stamped here,
+  once, because a component may never read it.
+
+  It is written into the markup rather than added by a script: it is not a
+  preference, it never changes, and anything stamping it at runtime would render
+  one frame at desktop size first.
+-->
+<html lang="en" class="web">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Trove is a self-hosted claimer for the games that are temporarily free, on your own store accounts."
+    />
+    <meta name="theme-color" content="#0D0E10" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#E4E0D9" media="(prefers-color-scheme: light)" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Trove</title>
+    <script>
+      // Apply the stored theme before first paint, so there is no flash of the
+      // other one.
+      //
+      // Three states: dark is the `dark` class, forced light is `light`, and
+      // following the system stamps nothing at all, so `prefers-color-scheme`
+      // decides. `lib/app-context.tsx` does exactly the same thing; the two
+      // have to agree or the first paint shows one theme and the second the
+      // other.
+      ;(function () {
+        try {
+          var root = document.documentElement
+          root.classList.remove('dark', 'light')
+          var stored = localStorage.getItem('trove.theme') || 'dark'
+          if (stored === 'dark' || stored === 'light') root.classList.add(stored)
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

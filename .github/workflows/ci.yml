@@ -1,0 +1,56 @@
+name: Checks
+
+# Small on purpose. There is no test suite yet, so this is the two things that
+# can be checked without one: the frontend type-checks, and the backend can be
+# imported. Both have caught real breakage in this repository already - a toast
+# tone that was not in the union, and a router that would not load.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      # `npm run lint` is `tsc --noEmit`.
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: Import the app
+        # DATA_DIR into the workspace: importing builds the settings object,
+        # which creates the data directory, and the default `/data` is not
+        # writable on a runner.
+        env:
+          DATA_DIR: ./ci-data
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, 'backend')
+          from app.main import app
+          routes = [r.path for r in app.routes if getattr(r, 'path', '').startswith('/api')]
+          print(f'{len(routes)} API routes registered')
+          assert '/api/health' in routes
+          "
