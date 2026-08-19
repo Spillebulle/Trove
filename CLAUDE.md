@@ -664,6 +664,17 @@ session trusting something nobody has run.
   driven run reach the store from a datacenter address without a challenge.
   Whether that holds at the *login* and the *checkout* is what a signed-in
   account will tell; those pages are where Epic challenges hardest.
+- **A cookie survives close-and-reopen with the run's launch args**
+  (`tools/cookie_persist.py` in the container), and the un-driven window
+  carries `--password-store=basic --use-mock-keychain` on its command line.
+  This is the sign-in-loop fix; the workflow asserts both.
+- **The sign-in window opens on Epic's real login page, full screen.** The
+  capture shows `www.epicgames.com/id/login`, email-first (one field and a
+  Continue button; the password field appears only after Continue), the email
+  field autofocused, no address bar and no infobar. So the assisted sequence -
+  email, Enter/Continue, wait, password, Enter - matches Epic's actual flow,
+  and a blind five-key smoke sequence lands it all in the one email field,
+  which is the expected shape of typing without being able to read the page.
 - **Typing into the un-driven window, in the container.** The smoke workflow
   stores an email, a password and a TOTP secret on the account, opens the
   sign-in window, and posts `email, tab, password, code, enter` to
