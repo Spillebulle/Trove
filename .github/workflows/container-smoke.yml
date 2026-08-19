@@ -95,6 +95,15 @@ jobs:
           assert not r.get("error"), r.get("error")
           '
 
+      - name: Cookies persist across launches (the sign-in-loop regression)
+        # The loop was the un-driven window and the driven check using different
+        # cookie stores. This proves a cookie written with the run's launch args
+        # survives close-and-reopen. No keyring here, so it cannot reproduce the
+        # original break, but it guards the property the fix restored.
+        run: |
+          docker cp tools/cookie_persist.py trove:/tmp/cookie_persist.py
+          docker exec -u pwuser -w /app trove python /tmp/cookie_persist.py
+
       - name: Which way did the sandbox go? (and does "on" still launch)
         # The default probe above already decided; this prints it, then forces
         # the sandbox on to see whether that alone launches. Non-fatal.
@@ -133,6 +142,10 @@ jobs:
           if grep -Eq -- '--remote-debugging|--enable-automation|--headless' cmdline.txt; then
             echo "::error::automation flags on the un-driven window"; exit 1
           fi
+          # The cookie-store fix: the un-driven window must share the driven
+          # browser's deterministic store, or the session it creates is lost.
+          grep -q -- '--password-store=basic' cmdline.txt || { echo "::error::the sign-in window is missing --password-store=basic"; exit 1; }
+          grep -q -- '--use-mock-keychain' cmdline.txt || { echo "::error::the sign-in window is missing --use-mock-keychain"; exit 1; }
           echo "--- typing stored sign-in details into the window (xdotool through the X server)"
           curl -fsS -b "$jar" -X PATCH -H 'content-type: application/json' \
             -d '{"login_email":"smoke@example.com","login_password":"not-a-real-password","totp_secret":"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"}' \

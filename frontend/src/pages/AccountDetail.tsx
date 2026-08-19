@@ -49,6 +49,8 @@ export function AccountDetail() {
   // The container's screen, for a sign-in window opened there. See
   // `components/ScreenView.tsx` for why it is a different thing from the live view.
   const [screenOpen, setScreenOpen] = useState(false)
+  // A live line of what the assisted sign-in is doing, shown over the screen.
+  const [signInStep, setSignInStep] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
@@ -140,6 +142,43 @@ export function AccountDetail() {
     onError: (error: Error) => push(error.message, 'critical'),
   })
 
+  // The assisted sign-in. It types the stored email and password into the
+  // login form on the container's screen and presses Enter between them, the
+  // way a person would, leaving only the captcha (and a 2FA code, if the
+  // account uses one) to the human. It is best-effort by nature: the window
+  // has no automation attached - that is the whole point - so Trove cannot see
+  // the page and instead waits a beat between steps and trusts Epic's form to
+  // be focused where a person would expect. If a step lands wrong, the single
+  // Email / Password / Code buttons do the same thing one at a time.
+  const [assisting, setAssisting] = useState(false)
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const assistedSignIn = async () => {
+    setAssisting(true)
+    try {
+      setSignInStep('Typing your email…')
+      await api.accounts.typeIntoScreen(accountId, 'email')
+      await sleep(400)
+      setSignInStep('Continuing…')
+      await api.accounts.typeIntoScreen(accountId, 'enter')
+      setSignInStep('Waiting for the password step to load…')
+      await sleep(3000)
+      setSignInStep('Typing your password…')
+      await api.accounts.typeIntoScreen(accountId, 'password')
+      await sleep(400)
+      setSignInStep('Signing in…')
+      await api.accounts.typeIntoScreen(accountId, 'enter')
+      await sleep(2500)
+      setSignInStep(
+        'If Epic asks you to verify — a captcha, or a two-factor code — do that on the screen now. For a code, press Code. Then press Done.',
+      )
+    } catch (error) {
+      setSignInStep(null)
+      push(error instanceof Error ? error.message : 'The assisted sign-in stopped.', 'critical')
+    } finally {
+      setAssisting(false)
+    }
+  }
+
   const closeSignIn = useMutation({
     mutationFn: () => api.accounts.closeSignIn(accountId),
     onSuccess: () => {
@@ -202,8 +241,38 @@ export function AccountDetail() {
   const needsSignIn = data.status === 'never_signed_in'
   const needsHand = data.status === 'needs_attention'
 
+  // What is happening right now, in a sentence, so a greyed-out button is
+  // never the only signal. The immediate mutation states come first because
+  // they are true the instant a button is pressed; `busy_with` is polled and
+  // lags a little, and covers work started elsewhere (the scheduler, another
+  // tab).
+  const activity =
+    signInHere.isPending
+      ? 'Opening a sign-in window…'
+      : checkSessionNow.isPending
+        ? 'Asking the store whether this account is signed in…'
+        : runNow.isPending
+          ? 'Starting a run…'
+          : resetProfile.isPending
+            ? 'Starting a fresh browser profile…'
+            : data.busy_with === 'a sign-in check'
+              ? 'Checking whether this account is signed in…'
+              : data.busy_with === 'a claim run'
+                ? 'Checking the store for free games…'
+                : data.busy_with === 'a sign-in window'
+                  ? 'A sign-in window is open on Trove’s screen.'
+                  : data.busy_with === 'the live view'
+                    ? 'The live view is open.'
+                    : null
+
   return (
     <>
+      {activity && (
+        <div className="mb-4 flex items-center gap-2 rounded-control border border-line-soft bg-raised px-4 py-2.5 text-body text-fg">
+          <Spinner />
+          {activity}
+        </div>
+      )}
       <PageHeader
         title={data.label}
         subtitle={
@@ -716,12 +785,30 @@ export function AccountDetail() {
         <div className="h-[60vh] min-h-[380px]">
           {screenOpen && (
             <ScreenView
+              status={signInStep}
               onClose={() => {
                 setScreenOpen(false)
+                setSignInStep(null)
                 refresh()
               }}
               footer={
                 <>
+                  {/* One press that types the email, Enter, the password and
+                      Enter, with the captcha left to the person. Best-effort,
+                      because the window has nothing attached for Trove to read;
+                      the single buttons beside it are the reliable fallback. */}
+                  {screenInfo.data?.typing && data.login_email && data.has_login_password && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={assisting}
+                      title="Type your email and password into the login form and press Enter between them. You still answer the captcha."
+                      onClick={() => void assistedSignIn()}
+                    >
+                      {assisting ? <Spinner /> : <KeyRound className="size-icon" />}
+                      Sign in for me
+                    </button>
+                  )}
                   {/* The password-manager half: click a field on the screen,
                       press the button, Trove types it there. Enter is the
                       one key worth a button, so the hands can stay on this

@@ -107,6 +107,23 @@ CONTAINER_ARGS = [
     # forever and one a person could answer.
     "--ignore-gpu-blocklist",
     "--enable-unsafe-webgpu",
+    # **The cookie store, and why the sign-in loop happened.** Chrome on Linux
+    # encrypts the cookie database with a key from the system keyring (Secret
+    # Service / gnome-keyring). A container has no keyring, so which key Chrome
+    # uses is unstable between launches - and cookies written under one key are
+    # undecryptable under the next, which reads as "logged out". It bit exactly
+    # here: Playwright's *driven* browser already passes these two flags
+    # (`--password-store=basic --use-mock-keychain`, deterministic obfuscation,
+    # no keyring), but the *un-driven* sign-in window did not. So a person
+    # signed in through the un-driven window, its cookies were encrypted with a
+    # keyring key, and the driven session-check - using the mock keychain -
+    # could not read them and reported the account signed out. Reopening the
+    # un-driven window could not read its own previous cookies either, and the
+    # whole thing looped. Giving the un-driven window the same two flags makes
+    # both browsers share one deterministic key, so the session written by hand
+    # survives the handoff to the run and survives a restart.
+    "--password-store=basic",
+    "--use-mock-keychain",
 ]
 
 # `--no-sandbox`, and when. Chrome's sandbox needs either its setuid helper

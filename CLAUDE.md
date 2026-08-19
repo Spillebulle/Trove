@@ -51,6 +51,23 @@ rest like everything else. Automating a store login can breach that store's
 terms of service; the app is for the user's own accounts on their own machine,
 and the README should say so plainly rather than pretending otherwise.
 
+**The sign-in loop, and the cookie store (0.1.8).** A person signed in on the
+container's screen, closed the window, and the session check reported them
+signed out - and reopening the window showed them signed out too, forever.
+The cause was the cookie store. Chrome on Linux encrypts the cookie database
+with a key from the system keyring; a container has no keyring, so the key is
+unstable between launches, and cookies written under one key are undecryptable
+under the next. Playwright's *driven* browser already sidesteps this with
+`--password-store=basic --use-mock-keychain` (deterministic, no keyring) - but
+the *un-driven* sign-in window did not, so the session a person created by hand
+was written with a keyring key the driven session-check (mock keychain) could
+not read. Both browsers now carry those two flags via `browser.CONTAINER_ARGS`,
+so the hand-made session survives the handoff to the run and survives a
+restart. The smoke workflow proves a cookie persists across close-and-reopen
+(`tools/cookie_persist.py`) and that the flags are on the un-driven window's
+command line. Keep "Remember me" checked at sign-in too: without it Epic's auth
+is a session cookie that no store can persist across a browser restart.
+
 **On stored store credentials (0.1.7).** An account *may* hold an encrypted
 sign-in email, password and TOTP secret, and the rule about them is narrow
 and must stay narrow: they are typed into the un-driven sign-in window on the

@@ -31,9 +31,12 @@ type Phase = 'connecting' | 'live' | 'closed' | 'error'
 export function ScreenView({
   onClose,
   footer,
+  status,
 }: {
   onClose: () => void
   footer?: React.ReactNode
+  // A live line of what an assisted step is doing, shown over the picture.
+  status?: string | null
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<RFB | null>(null)
@@ -119,6 +122,15 @@ export function ScreenView({
             <span className="flex items-center gap-2 text-body text-dim">
               <Spinner />
               Connecting to Trove&rsquo;s screen.
+            </span>
+          </div>
+        )}
+
+        {status && phase === 'live' && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3">
+            <span className="flex items-center gap-2 rounded-control bg-raised px-3 py-1.5 text-small text-fg shadow-e2">
+              <Spinner />
+              {status}
             </span>
           </div>
         )}

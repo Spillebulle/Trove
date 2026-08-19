@@ -95,6 +95,13 @@ try:
               return await r.json(); }"""
         )
         aid = acct["id"]
+        # Store credentials so the assisted sign-in and the type buttons show.
+        page.evaluate(
+            """async (id) => { await fetch(`/api/accounts/${id}`, {method:'PATCH',
+              headers:{'content-type':'application/json'},
+              body: JSON.stringify({login_email:'e2e@example.com', login_password:'not-real', totp_secret:'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'})}); }""",
+            aid,
+        )
         can = page.evaluate(f"async () => (await fetch('/api/accounts/{aid}/can-sign-in-here')).json()")
         print("can-sign-in-here:", can)
         assert can.get("via") == "screen", can
@@ -117,6 +124,10 @@ try:
         a = page.evaluate(f"async () => (await fetch('/api/accounts/{aid}')).json()")
         print("busy_with while open:", a.get("busy_with"))
         assert a.get("busy_with") == "a sign-in window", a
+        # The type buttons and the assisted "Sign in for me" only render where
+        # there is an X display with xdotool - i.e. in the container, not here
+        # on Windows - so the assisted sequence is exercised by the smoke
+        # workflow's /type calls rather than clicked here.
         page.get_by_role("button", name="Done, close the window").click()
         time.sleep(5)
         a = page.evaluate(f"async () => (await fetch('/api/accounts/{aid}')).json()")

@@ -206,6 +206,10 @@ class EpicAdapter(BaseAdapter):
     store = "epic"
     display_name = "Epic Games Store"
     login_url = f"{STORE_ROOT}/{LOCALE}/"
+    # The email/password form. `www.epicgames.com/id/login` is where the store's
+    # own "Sign In" lands; going straight there is what the assisted sign-in
+    # needs, and it saves a person a click.
+    signin_url = "https://www.epicgames.com/id/login"
     blurb = (
         "Claims the weekly giveaway. Sign in once through the live view and "
         "Trove reuses that session; it never stores your password."

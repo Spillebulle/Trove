@@ -104,6 +104,15 @@ class BaseAdapter(ABC):
     # Where a person goes to sign in by hand, opened by the live view. The
     # first thing a new account does.
     login_url: str = ""
+    # The store's actual sign-in page, opened by the sign-in window. Separate
+    # from `login_url` (the store front, which `health` reads) because a person
+    # who pressed "Sign in here" wants the login form, not the shop - and the
+    # assisted sign-in has to start there. Falls back to `login_url`.
+    signin_url: str = ""
+
+    @property
+    def sign_in_page(self) -> str:
+        return self.signin_url or self.login_url
     # A sentence for the add-account page saying what this adapter does and
     # does not do.
     blurb: str = ""

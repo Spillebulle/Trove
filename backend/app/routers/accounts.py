@@ -269,7 +269,7 @@ async def sign_in_here(account_id: int, db: Session = Depends(get_db)) -> Accoun
         )
 
     try:
-        await manager.open_local(account.id, profile, adapter.login_url, on_closed=_verify)
+        await manager.open_local(account.id, profile, adapter.sign_in_page, on_closed=_verify)
     except ProfileBusy as exc:
         raise HTTPException(409, str(exc)) from exc
     except NoLocalBrowser as exc:

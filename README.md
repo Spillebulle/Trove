@@ -94,8 +94,13 @@ protocol is attached.
 Trove never signs in with a store password on its own. You *can* store the
 account's email, password and authenticator secret (encrypted) so that when
 you sign in on the container's screen, Trove types them into the form at the
-press of a button, the way a password manager would - which leaves the captcha
-as the only thing that needs you. Nothing that runs on a schedule can read them.
+press of a button, the way a password manager would - or press **Sign in for
+me** and it types the email, presses Enter, types the password and presses
+Enter in sequence, leaving only the captcha (and a 2FA code, if you use one) to
+you. Nothing that runs on a schedule can read the details.
+
+Check **Remember me** when you sign in: without it Epic's session is dropped
+when the browser closes, and no amount of session-keeping can hold it.
 
 **It needs real Google Chrome.** Playwright's bundled Chromium ships without
 H.264, HEVC and AAC while telling every site it is Chrome, and Cloudflare's
