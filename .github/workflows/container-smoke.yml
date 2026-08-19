@@ -122,6 +122,15 @@ jobs:
           if grep -Eq -- '--remote-debugging|--enable-automation|--headless' cmdline.txt; then
             echo "::error::automation flags on the un-driven window"; exit 1
           fi
+          echo "--- a picture of the container's screen, through its VNC port"
+          # A throwaway VNC client in a second container sharing trove's
+          # network namespace, so localhost:5900 is reachable without ever
+          # exposing it. The PNG is uploaded as an artifact: it is the one
+          # place to see what the store actually showed the un-driven window
+          # from this address.
+          mkdir -p shots
+          docker run --rm --network container:trove -v "$PWD/shots:/shots" python:3.12-slim             sh -c 'pip install -q vncdotool >/dev/null 2>&1 && vncdo -s 127.0.0.1::5900 capture /shots/screen-signin.png'             || echo "::warning::could not capture the screen over VNC"
+          ls -l shots || true
           echo "--- the account shows the window as holding the profile"
           curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id" | python3 -c 'import json,sys; a=json.load(sys.stdin); print("busy_with:", a.get("busy_with"))'
           echo "--- close-sign-in"
@@ -149,4 +158,5 @@ jobs:
           path: |
             diagnose.json
             cmdline.txt
+            shots/
           if-no-files-found: ignore
