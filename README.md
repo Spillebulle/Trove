@@ -51,14 +51,20 @@ page. Everything else, including the two encryption keys, is generated into
 `./data` on the first start. Back that directory up and you have backed up your
 signed-in sessions.
 
-> **The container cannot do the first sign-in.** It has no screen you can see,
-> so "Sign in here" is refused there, and a captcha can refuse the live view
-> too. Sign in on a desktop and copy `data/profiles/<id>-<slug>/` into the
-> container's volume, then press "Check again" on the account. Everything after
-> that - the schedule, claiming, the ledger, notifications - runs in the
-> container normally.
+> **Signing in inside the container.** The container has a screen of its own -
+> a virtual one - and "Sign in here" opens the account's Chrome on it with
+> nothing attached: no remote control, no automation flags. Trove then shows
+> you that screen in the page, you sign in, and you press "Done, close the
+> window". If the store still refuses you there (a datacenter address gets
+> challenged far more than a home one), sign in on a desktop and copy
+> `data/profiles/<id>-<slug>/` into the container's volume, then press "Check
+> again" on the account. Either way, everything after that - the schedule,
+> claiming, the ledger, notifications - runs in the container normally.
 >
-> The Docker image has never been built or run. Expect to debug the first one.
+> Settings has a **Check the browser** button that launches the browser the way
+> a claim run does and reports what a store page sees - which Chrome, which
+> codecs, whether WebGL and WebGPU exist. Run it first on a new install; every
+> captcha that has beaten this app was explained by one of those lines.
 
 ## Signing in, once
 
@@ -70,10 +76,15 @@ You sign in as you normally would, close the window, and Trove reuses that
 session from then on. This is the way in, because a captcha will not accept an
 answer from a browser it can tell is being driven.
 
-The live view above is the fallback for when Trove is on another machine: the
-account's browser, streamed into the page. It is fine for looking and for
-simple sign-ins, but a store that puts up an interactive captcha may refuse it
-no matter how honestly you click.
+In the container the same button opens that window on the container's own
+virtual screen and shows you the screen, which comes to the same thing: a
+plain Chrome with nothing attached to it, and you at the controls.
+
+The live view above is the other fallback: the account's browser, streamed
+into the page over the browser's own debugging protocol. It is fine for looking
+and for simple sign-ins, but a store that puts up an interactive captcha may
+refuse it no matter how honestly you click, because a page can tell that
+protocol is attached.
 
 Trove never asks for a store password, and there is nowhere to put one.
 
@@ -139,6 +150,7 @@ adding to a library, are encrypted and revealed one at a time.
 | `DEFAULT_INTERVAL_HOURS` | `8` | How often an account is checked, unless it sets its own. |
 | `TROVE_HEADLESS` | `false` | Headed is the default because headless is a signal bot detection reads. |
 | `BROWSER_CHANNEL` | `auto` | Drives real Google Chrome when it is there. Leave it alone: see below. |
+| `VNC_ADDRESS` | `127.0.0.1:5900` in the image | Where the container's screen is served from. Trove bridges it through its own login; nothing else can reach it. Set empty to turn the screen view off. |
 
 Everything else is in [`.env.example`](.env.example), commented.
 

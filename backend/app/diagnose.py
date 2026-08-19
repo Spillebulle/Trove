@@ -112,6 +112,27 @@ async () => {
     }
   } catch (e) { out.webgpu = 'error: ' + e.message; }
 
+  // The classic "is the DevTools protocol attached" check: when Runtime is
+  // enabled the protocol serialises every console argument with a preview,
+  // and building the preview of an Error used to read its `stack`, so a
+  // getter planted there fired if and only if a debugger was attached. This
+  // is what the "stealth" Playwright forks exist to avoid.
+  //
+  // **Measured on Chrome 151 with `Runtime.enable` sent explicitly: it does
+  // not fire** - for console.log, debug, error, dir and table alike, and not
+  // for a getter on a plain object either. V8 reads the stack internally now.
+  // So a false here does not mean "undetectable"; it means this particular
+  // tell is gone from current Chrome. Kept because it costs nothing and will
+  // say so if a build brings it back.
+  try {
+    let touched = false;
+    const err = new Error('probe');
+    Object.defineProperty(err, 'stack', { get() { touched = true; return ''; }, configurable: true });
+    console.debug(err);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    out.cdp_runtime_leak = touched;
+  } catch (e) { out.cdp_runtime_leak = 'error: ' + e.message; }
+
   // Permissions API behaving like a real browser's.
   try {
     const p = await navigator.permissions.query({ name: 'notifications' });
@@ -249,6 +270,16 @@ def findings(report: dict) -> list[dict]:
                 "level": "caution",
                 "text": "No WebGPU adapter. A challenge has been seen to log "
                 "'No available adapters.' in exactly this state.",
+            }
+        )
+    if page.get("cdp_runtime_leak") is True:
+        out.append(
+            {
+                "level": "info",
+                "text": "The page can tell the DevTools protocol is attached (an "
+                "Error's stack getter fires on console.debug). That is the "
+                "price of driving a browser, and why the un-driven sign-in "
+                "window exists.",
             }
         )
     if page.get("has_focus") is False:

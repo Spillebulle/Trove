@@ -87,7 +87,7 @@ jobs:
           echo "----- findings -----"
           python3 -c '
           import json; r = json.load(open("diagnose.json"))
-          for f in r.get("findings", []): print(f"[{f[\"level\"]}] {f[\"text\"]}")
+          for f in r.get("findings", []): print("[%s] %s" % (f["level"], f["text"]))
           print("channel:", r.get("channel"), "| version:", r.get("browser_version"))
           p = r.get("page") or {}
           print("webgl:", p.get("webgl")); print("webgpu:", p.get("webgpu")); print("codecs:", p.get("codecs"))
