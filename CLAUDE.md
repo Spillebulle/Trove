@@ -345,7 +345,12 @@ is undetectable, and the un-driven window stays the way in.
   address is challenged far more readily than a home one, and no browser
   change fixes that. If the container lives on a datacenter address, route its
   egress through a residential connection (a Tailscale exit node at home, a
-  WireGuard tunnel) or run it at home.
+  WireGuard tunnel) or run it at home. `BROWSER_PROXY` (`socks5://host:port`)
+  is the in-app version of that: it is applied to the driven browser *and* to
+  the un-driven sign-in window, so the session is made and reused from one
+  address - a session created at home and replayed from a datacenter is
+  itself a signal. An SSH `-D` tunnel back to a home machine is the cheapest
+  way to get one.
 
 **The fallback is still to sign in on a desktop and carry the profile over.**
 A profile is an ordinary directory:
@@ -592,6 +597,10 @@ session trusting something nobody has run.
   recreating if the screen view is touched.
 - That the Error-stack-getter CDP tell does not fire on Chrome 151 even with
   `Runtime.enable` sent, for every console method.
+- That `document.hasFocus()` is **true** for a headed Chrome under Xvfb with
+  no window manager at all, measured by the probe in the container without
+  any focus emulation. So the container case `live.enable_focus` was kept for
+  is also not a case where it changes anything observed.
 
 **Written and NOT verified:**
 

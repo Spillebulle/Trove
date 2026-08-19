@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     # How long a Playwright action may take before the run gives up and files
     # the account for attention. Generous: a store's checkout is slow.
     browser_timeout_ms: int = 45000
+    # A proxy for the browser's traffic only - `socks5://host:port` or
+    # `http://host:port` - and nothing else Trove does. This exists for one
+    # reason: **the address matters more than anything the browser does.** A
+    # container on a VPS or cloud address is challenged by a store's edge far
+    # more readily than one at home, and no browser flag changes that. An SSH
+    # `-D` tunnel or a SOCKS proxy back to a home connection gives the browser
+    # a residential address while Trove stays where it is. Applied to the
+    # driven browser and the un-driven sign-in window alike, so the session
+    # is created and reused from the same address. Empty means direct.
+    browser_proxy: str = ""
     # How long an idle live-view browser stays open before it is closed. The
     # user opens the window, signs in, and wanders off; the browser must not
     # sit there holding a profile lock forever.

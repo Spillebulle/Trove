@@ -366,6 +366,10 @@ def launch_detached(profile_path: Path, url: str):
             # The shared-memory problem is the same as for the driven browser.
             "--disable-dev-shm-usage",
         ]
+    if settings.browser_proxy:
+        # The same address the runs use. A session made from one address and
+        # replayed from another is exactly what a store's edge is watching for.
+        args.append(f"--proxy-server={settings.browser_proxy}")
     args.append(url)
     return subprocess.Popen(
         args,
@@ -491,6 +495,7 @@ class BrowserManager:
                 locale="en-GB",
                 timezone_id="Europe/Oslo",
                 accept_downloads=False,
+                proxy={"server": settings.browser_proxy} if settings.browser_proxy else None,
             )
             context.set_default_timeout(settings.browser_timeout_ms)
             entry.context = context

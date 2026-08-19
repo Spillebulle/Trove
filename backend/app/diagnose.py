@@ -154,6 +154,7 @@ async def probe() -> dict:
         "display": os.environ.get("DISPLAY"),
         "vnc": settings.vnc_address or None,
         "channel_setting": settings.browser_channel,
+        "proxy": settings.browser_proxy or None,
         "launch_args": list(LAUNCH_ARGS),
     }
     probe_dir = settings.profiles_path / ".diagnose"
@@ -171,6 +172,7 @@ async def probe() -> dict:
                 locale="en-GB",
                 timezone_id="Europe/Oslo",
                 timeout=60_000,
+                proxy={"server": settings.browser_proxy} if settings.browser_proxy else None,
             )
             try:
                 page = context.pages[0] if context.pages else await context.new_page()

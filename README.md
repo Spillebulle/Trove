@@ -151,6 +151,7 @@ adding to a library, are encrypted and revealed one at a time.
 | `TROVE_HEADLESS` | `false` | Headed is the default because headless is a signal bot detection reads. |
 | `BROWSER_CHANNEL` | `auto` | Drives real Google Chrome when it is there. Leave it alone: see below. |
 | `VNC_ADDRESS` | `127.0.0.1:5900` in the image | Where the container's screen is served from. Trove bridges it through its own login; nothing else can reach it. Set empty to turn the screen view off. |
+| `BROWSER_PROXY` | empty | `socks5://host:port` for the browser's traffic only. A store challenges a cloud address far more than a home one; an SSH `-D` tunnel home fixes that without moving Trove. |
 
 Everything else is in [`.env.example`](.env.example), commented.
 
