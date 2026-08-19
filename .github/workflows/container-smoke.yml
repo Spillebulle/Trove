@@ -102,7 +102,7 @@ jobs:
         # original break, but it guards the property the fix restored.
         run: |
           docker cp tools/cookie_persist.py trove:/tmp/cookie_persist.py
-          docker exec -u pwuser -w /app trove python /tmp/cookie_persist.py
+          docker exec -e PYTHONPATH=/app -u pwuser -w /app trove python /tmp/cookie_persist.py
 
       - name: Which way did the sandbox go? (and does "on" still launch)
         # The default probe above already decided; this prints it, then forces
