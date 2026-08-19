@@ -26,8 +26,7 @@ When a store asks a question it cannot answer, it stops and asks you.
 ```yaml
 services:
   trove:
-    image: trove:latest
-    build: .
+    image: ghcr.io/spillebulle/trove:latest
     container_name: trove
     restart: unless-stopped
     ports:
@@ -43,7 +42,9 @@ services:
 ```
 
 `docker compose up -d`, then open `http://localhost:8080` and sign in as
-`admin`. The image carries a real Chrome, so it is around 2 GB and wants
+`admin`. The image is `linux/amd64` only, because it installs real Google
+Chrome and Google ships no Chrome for Linux on arm64. `:latest` moves with each
+release; use `:main` for the tip of the branch. The image carries a real Chrome, so it is around 2 GB and wants
 `shm_size: 1gb`; below about 512 MB Chrome crashes part-way through a store
 page. Everything else, including the two encryption keys, is generated into
 `./data` on the first start. Back that directory up and you have backed up your

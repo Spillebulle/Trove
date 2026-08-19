@@ -1,7 +1,10 @@
 services:
   trove:
-    image: trove:latest
-    build: .
+    # The published image. `:latest` moves with each tagged release; `:main`
+    # is the tip of the branch, which is what to use while the first Linux
+    # deployment is still being debugged. To build it yourself instead, drop
+    # this line and put `build: .` in its place.
+    image: ghcr.io/spillebulle/trove:latest
     container_name: trove
     restart: unless-stopped
     ports:
