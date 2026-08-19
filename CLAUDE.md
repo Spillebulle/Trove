@@ -332,6 +332,25 @@ and closes one and reads its command line back: no `--remote-debugging`, no
 (F11, not kiosk) so the small picture is all page and the address bar and
 the `--no-sandbox` infobar are out of the way.
 
+**Watching a run** (0.1.9). A claim run is headed on the same Xvfb display the
+screen view streams, so "Run and watch" (`POST /run?watch=true`) opens the
+screen view and the person sees the run happen: the store loads, the session
+is checked, the checkout is tried. A watched run **holds the browser open**
+when it finishes or fails - `runner._hold_open_for_watch`, inside the
+`manager.session` block so the window does not close - until Done
+(`/stop-watching`, `runner.release_watch`) or a 300 s cap. That is what makes
+the checkout fixable: it is the one part no test can reach, and now a person
+can read the exact page Epic showed rather than a screenshot after the fact.
+The stop is sticky (`_watch_stop`) so a Done pressed before the hold starts is
+not lost. Outside watch mode none of this runs.
+
+**The checkout is the live-fix surface.** `adapters/epic.PLACE_ORDER` (and
+AGREEMENT, CONFIRMED, OWNED) are a deliberately long list of selectors because
+Epic renames the order button constantly; when a claim stops with "could not
+find the button that places the order", watch a run, read the real label off
+the screen, and add it there. The claim now logs each checkout step, so the
+container log narrates it too.
+
 **Typing into that window** is `keyboard.py`: `xdotool type --file -` through
 the X server (XTEST) into the focused window, which on that screen is the
 un-driven Chrome; the text goes on stdin, never argv. `POST

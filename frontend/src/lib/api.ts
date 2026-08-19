@@ -102,7 +102,9 @@ export const api = {
       body: Partial<Account> & { totp_secret?: string; login_email?: string; login_password?: string },
     ) => patch<Account>(`/api/accounts/${id}`, body),
     remove: (id: number) => request<void>(`/api/accounts/${id}`, { method: 'DELETE' }),
-    run: (id: number) => post<{ started: boolean }>(`/api/accounts/${id}/run`),
+    run: (id: number, watch = false) =>
+      post<{ started: boolean }>(`/api/accounts/${id}/run${watch ? '?watch=true' : ''}`),
+    stopWatching: (id: number) => post<void>(`/api/accounts/${id}/stop-watching`),
     clearAttention: (id: number) => post<Account>(`/api/accounts/${id}/clear-attention`),
     resetProfile: (id: number) => post<Account>(`/api/accounts/${id}/reset-profile`),
     signInHere: (id: number) => post<Account>(`/api/accounts/${id}/sign-in-here`),

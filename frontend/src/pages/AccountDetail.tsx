@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CornerDownLeft, ExternalLink, KeyRound, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
+import { CornerDownLeft, ExternalLink, Eye, KeyRound, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import {
@@ -51,6 +51,8 @@ export function AccountDetail() {
   const [screenOpen, setScreenOpen] = useState(false)
   // A live line of what the assisted sign-in is doing, shown over the screen.
   const [signInStep, setSignInStep] = useState<string | null>(null)
+  // Watching a run on the container's screen.
+  const [watchOpen, setWatchOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
@@ -88,6 +90,29 @@ export function AccountDetail() {
     },
     onError: (error: Error) => push(error.message, 'critical'),
   })
+
+  // A run you watch. It runs headed on the container's screen and holds the
+  // browser open there when it finishes or fails, so the page it stopped on -
+  // the checkout, most usefully - stays up to be looked at. Pressing Done
+  // (stopWatch) releases it.
+  const runWatch = useMutation({
+    mutationFn: () => api.accounts.run(accountId, true),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['runs', accountId] })
+    },
+    onError: (error: Error) => {
+      setWatchOpen(false)
+      push(error.message, 'critical')
+    },
+  })
+  const stopWatch = useMutation({
+    mutationFn: () => api.accounts.stopWatching(accountId),
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+  const startWatchedRun = () => {
+    setWatchOpen(true)
+    runWatch.mutate()
+  }
 
   const clearAttention = useMutation({
     mutationFn: () => api.accounts.clearAttention(accountId),
@@ -338,6 +363,24 @@ export function AccountDetail() {
               <Monitor className="size-icon" />
               Live view
             </button>
+            {localSignIn.data?.via === 'screen' && screenInfo.data?.ok && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={startWatchedRun}
+                disabled={runNow.isPending || busy || needsSignIn}
+                title={
+                  needsSignIn
+                    ? 'Sign in to this account first.'
+                    : busy
+                      ? `The browser profile is in use by ${data.busy_with}.`
+                      : 'Run now and watch it happen on Trove’s screen, held open on whatever page it stops at.'
+                }
+              >
+                <Eye className="size-icon" />
+                Run and watch
+              </button>
+            )}
             <button
               type="button"
               className="btn-primary"
@@ -869,6 +912,58 @@ export function AccountDetail() {
                   Done, close the window
                 </button>
                 </>
+              }
+            />
+          )}
+        </div>
+      </Dialog>
+
+      {/*
+       * Watching a run. The claim runs headed on the container's display, which
+       * this streams over VNC, and a watched run holds the browser open on
+       * whatever page it ends on - so a checkout that Epic has changed is right
+       * there to read rather than gone before it can be seen. Done releases the
+       * hold; closing the dialog does the same, so the run is never left
+       * holding a browser nobody is watching.
+       */}
+      <Dialog
+        open={watchOpen}
+        onClose={() => {
+          stopWatch.mutate()
+          setWatchOpen(false)
+          refresh()
+        }}
+        title={`Watching ${data.label}`}
+        subtitle="The run, live on Trove’s screen. It opens the store, checks you are signed in, then tries the checkout."
+        size="large"
+      >
+        <div className="h-[60vh] min-h-[380px]">
+          {watchOpen && (
+            <ScreenView
+              status={
+                data.status === 'needs_attention'
+                  ? (data.status_reason ?? 'The run stopped and needs a hand.')
+                  : data.busy_with === 'a claim run'
+                    ? 'Running… the browser is held open here until you press Done.'
+                    : 'Starting the run…'
+              }
+              onClose={() => {
+                stopWatch.mutate()
+                setWatchOpen(false)
+                refresh()
+              }}
+              footer={
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    stopWatch.mutate()
+                    setWatchOpen(false)
+                    refresh()
+                  }}
+                >
+                  Done
+                </button>
               }
             />
           )}

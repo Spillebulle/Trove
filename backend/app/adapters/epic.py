@@ -114,11 +114,20 @@ CHALLENGE = [
     'text=/security check/i',
 ]
 
-# The button that places a zero-price order.
+# The button that places a zero-price order. Epic runs several checkouts at
+# once and renames this button often, so this list is long on purpose and is
+# the first thing to extend when a claim stops with "could not find the button
+# that places the order". Watch a run (Run and watch) to read the real label
+# off the screen, then add it here.
 PLACE_ORDER = [
     'button:has-text("Place Order")',
+    'button:has-text("Get Now")',
     'button:has-text("Get")',
+    'button:has-text("Confirm")',
+    'button[data-testid="purchase-cta-button"]',
     '[data-testid="purchase-cta-button"]',
+    'button.payment-btn',
+    '#purchase-app button:has-text("Place Order")',
 ]
 
 # Epic asks for agreement to a refund policy or an end user licence before the
@@ -327,14 +336,17 @@ class EpicAdapter(BaseAdapter):
                 detail="Epic will not sell this to your account, usually a region limit.",
             )
 
+        logger.info("Epic checkout: looking for the order button for %r.", offer.title)
         order = await _first_visible(page, PLACE_ORDER, timeout_ms=8000)
         if order is None:
             raise NeedsAttention(
                 "Could not find the button that places the order. Epic has "
-                "probably changed the checkout.",
+                "probably changed the checkout. Run this with \"Run and watch\" "
+                "to see the page, then the button's label goes in PLACE_ORDER.",
                 await self._shot(page, offer, "no-order-button"),
             )
 
+        logger.info("Epic checkout: clicking the order button.")
         await order.click()
 
         # One agreement click, if Epic asks. Not a loop: if it asks twice,
@@ -350,7 +362,9 @@ class EpicAdapter(BaseAdapter):
         # is the one long wait in the flow, because a zero-price order still
         # goes through Epic's payment pipeline.
         await self._guard(page, offer)
+        logger.info("Epic checkout: order placed, waiting for confirmation.")
         if await _first_visible(page, CONFIRMED, timeout_ms=20000):
+            logger.info("Epic checkout: confirmed %r.", offer.title)
             return ClaimResult(outcome="claimed", detail="Added to your library.")
         if await _first_visible(page, OWNED, timeout_ms=2000):
             return ClaimResult(

@@ -102,6 +102,15 @@ you. Nothing that runs on a schedule can read the details.
 Check **Remember me** when you sign in: without it Epic's session is dropped
 when the browser closes, and no amount of session-keeping can hold it.
 
+## Watching a claim
+
+Once you are signed in, **Run and watch** runs the claim on the container's
+screen and shows it to you live: the store loads, your session is checked, and
+the checkout is attempted. If it stops - Epic changes its checkout often - the
+browser is held open on the page it stopped at, so you can see exactly what it
+showed rather than guessing from a screenshot. Press Done when you have seen
+enough.
+
 **It needs real Google Chrome.** Playwright's bundled Chromium ships without
 H.264, HEVC and AAC while telling every site it is Chrome, and Cloudflare's
 captcha probes for exactly those codecs. On the bundle the checkbox spins and

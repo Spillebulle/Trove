@@ -23,7 +23,7 @@ from ..config import get_settings
 from ..crypto import decrypt, encrypt, totp_code
 from ..db import get_db
 from ..models import Account, Claim
-from ..runner import check_session, run_account
+from ..runner import check_session, release_watch, run_account
 from ..schemas import AccountCreate, AccountRead, AccountUpdate, TypeRequest
 from ..timeutil import utcnow
 
@@ -189,12 +189,19 @@ def delete_account(account_id: int, db: Session = Depends(get_db)) -> Response:
 
 
 @router.post("/{account_id}/run", status_code=202)
-async def run_now(account_id: int, db: Session = Depends(get_db)) -> dict:
+async def run_now(
+    account_id: int, watch: bool = False, db: Session = Depends(get_db)
+) -> dict:
     """Run this account now, whatever the schedule says.
 
     Returns as soon as the run has started. A claim run takes minutes, and a
     request that waits for it is a request that times out somewhere between the
     browser and a reverse proxy.
+
+    `watch=true` holds the browser open on the container's screen when the run
+    finishes or fails, so a person watching through the screen view can see the
+    page it stopped on - which is how the checkout gets fixed, since it is the
+    one part no test can reach. Only meaningful where there is a screen.
     """
     account = db.query(Account).filter(Account.id == account_id).first()
     if account is None:
@@ -209,7 +216,7 @@ async def run_now(account_id: int, db: Session = Depends(get_db)) -> dict:
     if holder:
         raise HTTPException(409, f"The browser profile is in use by {holder}.")
 
-    task = asyncio.create_task(run_account(account_id, trigger="manual"))
+    task = asyncio.create_task(run_account(account_id, trigger="manual", watch=watch))
     _running.add(task)
     task.add_done_callback(_running.discard)
     return {"started": True, "account_id": account_id, "at": utcnow()}
@@ -393,6 +400,18 @@ def type_into_sign_in(
             press_key({"enter": "Return", "tab": "Tab"}[body.what])
     except TypingUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
+    return Response(status_code=204)
+
+
+@router.post("/{account_id}/stop-watching", status_code=204)
+def stop_watching(account_id: int) -> Response:
+    """Let a watched run close its browser and finish.
+
+    The screen view's "Done" for a watched run. It releases the hold the run is
+    keeping on the browser so the page it stopped on stays visible; the run
+    then records its outcome and the window closes.
+    """
+    release_watch(account_id)
     return Response(status_code=204)
 
 

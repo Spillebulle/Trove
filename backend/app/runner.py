@@ -55,6 +55,67 @@ settings = get_settings()
 # the cost of being wrong about that is the account, not the game.
 PAUSE_BETWEEN_CLAIMS_S = 4.0
 
+# How long a watched run keeps the browser open on the screen after it finishes
+# or stops, so a person can look at the page that failed. They close it sooner
+# with the "Done" button; this is only the cap for when they wander off.
+WATCH_HOLD_MAX_S = 300.0
+
+# The release signal for each account's held-open watched run. The screen view's
+# "Done" sets it through `release_watch`, which lets the run close the browser
+# and finish. A dict rather than one event because two accounts can be watched
+# at once, though rarely.
+_watch_release: dict[int, asyncio.Event] = {}
+# Sticky "stop" so a Done pressed *before* the run reaches its hold is not lost:
+# without it, closing the watch dialog early would set nothing (no waiter yet),
+# and the hold would then open and sit for the full cap with nobody watching.
+_watch_stop: set[int] = set()
+
+
+def begin_watch(account_id: int) -> None:
+    """Clear any stale stop before a fresh watched run, so it holds normally."""
+    _watch_stop.discard(account_id)
+
+
+def release_watch(account_id: int) -> bool:
+    """Let a held-open watched run close its browser. Returns whether one waited.
+
+    Sticky: if the hold has not started yet, the request is remembered and the
+    hold is skipped when it would begin.
+    """
+    _watch_stop.add(account_id)
+    event = _watch_release.get(account_id)
+    if event is not None:
+        event.set()
+        return True
+    return False
+
+
+def is_watch_holding(account_id: int) -> bool:
+    """Is a watched run currently holding this account's browser open?"""
+    return account_id in _watch_release
+
+
+async def _hold_open_for_watch(account_id: int) -> None:
+    """Keep the browser open until the watcher presses Done or the cap passes.
+
+    Runs inside the `manager.session` block, so the context - and the window on
+    the container's screen - stays open for as long as this waits. It is what
+    turns a run that flashes past into one a person can actually see fail.
+    """
+    if account_id in _watch_stop:
+        _watch_stop.discard(account_id)
+        return  # Done was pressed before we got here; do not hold.
+    event = asyncio.Event()
+    _watch_release[account_id] = event
+    logger.info("Holding the browser open on the screen for account %s.", account_id)
+    try:
+        await asyncio.wait_for(event.wait(), timeout=WATCH_HOLD_MAX_S)
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.info("The watch hold for account %s timed out; closing.", account_id)
+    finally:
+        _watch_release.pop(account_id, None)
+        _watch_stop.discard(account_id)
+
 
 class RunCancelled(Exception):
     """The app is shutting down mid-run."""
@@ -190,7 +251,7 @@ async def check_session(account_id: int) -> tuple[bool, str]:
         db.close()
 
 
-async def run_account(account_id: int, trigger: str = "schedule") -> int:
+async def run_account(account_id: int, trigger: str = "schedule", watch: bool = False) -> int:
     """Run one account once. Returns the run id.
 
     Opens its own database session: this is called from a scheduler task and
@@ -212,8 +273,10 @@ async def run_account(account_id: int, trigger: str = "schedule") -> int:
         run_id = run.id
         started = utcnow()
 
+        if watch:
+            begin_watch(account.id)
         try:
-            await _do_run(db, account, run, profile_path)
+            await _do_run(db, account, run, profile_path, watch=watch)
         except ProfileBusy as exc:
             run.status = "failed"
             run.message = str(exc)
@@ -275,7 +338,9 @@ async def run_account(account_id: int, trigger: str = "schedule") -> int:
         db.close()
 
 
-async def _do_run(db: Session, account: Account, run: Run, profile_path: Path) -> None:
+async def _do_run(
+    db: Session, account: Account, run: Run, profile_path: Path, watch: bool = False
+) -> None:
     """The body of a run, with the bookkeeping left to the caller."""
     store = account.store
     adapter = get_adapter(store)
@@ -317,63 +382,77 @@ async def _do_run(db: Session, account: Account, run: Run, profile_path: Path) -
         account.id, profile_path, holder="a claim run", wait_s=2.0
     ) as context:
         page = await first_page(context)
+        try:
+            await _run_claims(db, account, run, adapter, page, pending)
+        finally:
+            # In watch mode the browser stays on the screen until the person
+            # presses Done, whatever the run came to - so a checkout that fails
+            # is still there to look at rather than gone in the half-second
+            # before the window closes. Outside watch mode this is a no-op.
+            if watch:
+                await _hold_open_for_watch(account.id)
 
-        healthy, sentence = await adapter.health(page)
-        if not healthy:
-            shot = await screenshot(
-                page, screenshot_name(account.id, store, "health")
-            )
-            raise NeedsAttention(sentence, shot)
 
-        # The session is good, so an old attention flag is stale.
-        if account.status != "ok":
-            _set_status(db, account, "ok", None, None)
+async def _run_claims(db, account, run, adapter, page, pending) -> None:
+    """Health-check the session, then attempt each pending offer."""
+    store = account.store
 
-        for index, (offer, row) in enumerate(pending):
-            if index:
-                await asyncio.sleep(PAUSE_BETWEEN_CLAIMS_S)
+    healthy, sentence = await adapter.health(page)
+    if not healthy:
+        shot = await screenshot(
+            page, screenshot_name(account.id, store, "health")
+        )
+        raise NeedsAttention(sentence, shot)
 
-            owned = await adapter.is_owned(page, offer)
-            if owned is True:
-                _record(
-                    db,
-                    account,
-                    run,
-                    row,
-                    outcome="already_owned",
-                    detail="Already in your library.",
-                )
-                run.already_owned += 1
-                db.commit()
-                continue
+    # The session is good, so an old attention flag is stale.
+    if account.status != "ok":
+        _set_status(db, account, "ok", None, None)
 
-            result = await adapter.claim(page, offer)
+    for index, (offer, row) in enumerate(pending):
+        if index:
+            await asyncio.sleep(PAUSE_BETWEEN_CLAIMS_S)
+
+        owned = await adapter.is_owned(page, offer)
+        if owned is True:
             _record(
                 db,
                 account,
                 run,
                 row,
-                outcome=result.outcome,
-                detail=result.detail,
-                key_code=result.key_code,
-                key_store=result.key_store,
-                shot=result.screenshot,
+                outcome="already_owned",
+                detail="Already in your library.",
             )
-            if result.outcome == "claimed":
-                run.claimed += 1
-                notify.send_soon(
-                    "claimed",
-                    notify.Notification(
-                        title=f"Claimed {row.title}",
-                        detail=result.detail or f"Added to {account.label}.",
-                        severity="good",
-                        context=f"{store} . {account.label}",
-                        url=row.url,
-                    ),
-                )
-            elif result.outcome == "already_owned":
-                run.already_owned += 1
+            run.already_owned += 1
             db.commit()
+            continue
+
+        result = await adapter.claim(page, offer)
+        _record(
+            db,
+            account,
+            run,
+            row,
+            outcome=result.outcome,
+            detail=result.detail,
+            key_code=result.key_code,
+            key_store=result.key_store,
+            shot=result.screenshot,
+        )
+        if result.outcome == "claimed":
+            run.claimed += 1
+            notify.send_soon(
+                "claimed",
+                notify.Notification(
+                    title=f"Claimed {row.title}",
+                    detail=result.detail or f"Added to {account.label}.",
+                    severity="good",
+                    context=f"{store} . {account.label}",
+                    url=row.url,
+                ),
+            )
+        elif result.outcome == "already_owned":
+            run.already_owned += 1
+        db.commit()
 
 
 def _record(
