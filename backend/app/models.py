@@ -114,6 +114,15 @@ class Account(Base):
     # one concession and no more: it is not a "solve 2FA for me" flow, it is
     # the user choosing to let the app type a code it was given.
     totp_secret = Column(Text, nullable=True)
+    # The store sign-in details, encrypted, and **only ever typed into the
+    # sign-in window on the container's screen at the user's request** - never
+    # used to log in unattended. CLAUDE.md's rule stands: a claim run signs in
+    # with nothing, and a login with a stored password on a schedule is exactly
+    # what bot detection looks for. These exist so that a person who has to
+    # answer a captcha in the screen view does not then also have to type an
+    # email and a generated password key by key through a remote picture.
+    login_email = Column(Text, nullable=True)
+    login_password = Column(Text, nullable=True)
 
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)

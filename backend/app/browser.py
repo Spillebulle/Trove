@@ -3,9 +3,10 @@
 This is the module the whole design turns on. CLAUDE.md's first rule is
 sessions, not logins: an account signs in once, by hand, and what Trove keeps
 afterwards is a Chromium profile directory holding the cookies, the local
-storage and the device fingerprint that sign-in produced. There is no password
-column anywhere in this app, and adding one would undo the design rather than
-extend it.
+storage and the device fingerprint that sign-in produced. A run signs in with
+nothing. (An account may hold encrypted sign-in details, but those are typed
+into the person's own sign-in window when they press a button - see
+`keyboard.py` - and nothing that runs unattended can read them.)
 
 Three facts drive the shape of everything below.
 
@@ -413,6 +414,12 @@ def launch_detached(profile_path: Path, url: str):
         args += [
             f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
             "--window-position=0,0",
+            # Full screen, as F11 would: the person is looking at this through
+            # the screen view and the address bar, the tab strip and the
+            # --no-sandbox infobar are a fifth of a small picture they cannot
+            # use. The page is the whole screen. `--kiosk` would do the same
+            # and also take away Esc and every dialog, which is too much.
+            "--start-fullscreen",
             # The shared-memory problem is the same as for the driven browser.
             "--disable-dev-shm-usage",
         ]

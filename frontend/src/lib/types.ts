@@ -46,6 +46,9 @@ export interface Account {
   last_run_at: string | null
   next_run_at: string | null
   has_totp: boolean
+  /** The stored sign-in email, if any; the password only as a yes/no. */
+  login_email: string | null
+  has_login_password: boolean
   notes: string | null
   created_at: string | null
   claimed_count: number

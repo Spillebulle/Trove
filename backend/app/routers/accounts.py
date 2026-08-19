@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .. import notify, scheduler
 from ..adapters import ADAPTER_MAP, get_adapter, known_stores
 from ..auth import current_user
+from ..keyboard import TypingUnavailable, press_key, type_text
 from ..browser import (
     NoLocalBrowser,
     ProfileBusy,
@@ -19,11 +20,11 @@ from ..browser import (
     purge_profile,
 )
 from ..config import get_settings
-from ..crypto import encrypt
+from ..crypto import decrypt, encrypt, totp_code
 from ..db import get_db
 from ..models import Account, Claim
 from ..runner import check_session, run_account
-from ..schemas import AccountCreate, AccountRead, AccountUpdate
+from ..schemas import AccountCreate, AccountRead, AccountUpdate, TypeRequest
 from ..timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ def serialise(db: Session, account: Account) -> AccountRead:
         last_run_at=account.last_run_at,
         next_run_at=account.next_run_at,
         has_totp=bool(account.totp_secret),
+        login_email=decrypt(account.login_email) if account.login_email else None,
+        has_login_password=bool(account.login_password),
         notes=account.notes,
         created_at=account.created_at,
         claimed_count=claimed,
@@ -124,10 +127,12 @@ def update_account(
         raise HTTPException(404, "No such account.")
 
     data = body.model_dump(exclude_unset=True)
-    if "totp_secret" in data:
-        value = data.pop("totp_secret")
-        # An empty string clears it; a missing key leaves it alone.
-        account.totp_secret = encrypt(value) if value else None
+    # The three secrets: an empty string clears, a missing key leaves alone,
+    # and what is stored is always the encrypted form.
+    for secret in ("totp_secret", "login_email", "login_password"):
+        if secret in data:
+            value = data.pop(secret)
+            setattr(account, secret, encrypt(value.strip()) if value and value.strip() else None)
     if "interval_hours" in data and data["interval_hours"] is not None:
         if data["interval_hours"] < settings.min_interval_hours:
             raise HTTPException(
@@ -339,6 +344,56 @@ def can_sign_in_here(account_id: int) -> dict:
             ),
         }
     return {"ok": True, "via": via, "reason": None}
+
+
+@router.post("/{account_id}/type", status_code=204)
+def type_into_sign_in(
+    account_id: int, body: TypeRequest, db: Session = Depends(get_db)
+) -> Response:
+    """Type a stored sign-in detail into the window on the container's screen.
+
+    The person presses a button; Trove types the email, the password, or the
+    current TOTP code into whatever field they have clicked, the way a password
+    manager would - through the X server, into an un-driven Chrome that has
+    nothing attached to it. That is the whole of it. It only works while the
+    account's own sign-in window is open on the screen, so the secret can only
+    ever land in that window, and it is never called by a run.
+    """
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if account is None:
+        raise HTTPException(404, "No such account.")
+    if not settings.has_screen_view:
+        raise HTTPException(409, "Typing into the screen only works in a container with a screen view.")
+    if manager.who_holds(account_id) != "a sign-in window":
+        raise HTTPException(409, "Open this account's sign-in window first; there is nothing to type into.")
+
+    if body.what == "email":
+        text = decrypt(account.login_email) if account.login_email else None
+        if not text:
+            raise HTTPException(409, "No sign-in email is stored for this account.")
+    elif body.what == "password":
+        text = decrypt(account.login_password) if account.login_password else None
+        if not text:
+            raise HTTPException(409, "No password is stored for this account.")
+    elif body.what == "code":
+        secret = decrypt(account.totp_secret) if account.totp_secret else None
+        if not secret:
+            raise HTTPException(409, "No authenticator secret is stored for this account.")
+        try:
+            text = totp_code(secret)
+        except ValueError as exc:
+            raise HTTPException(409, f"The stored authenticator secret is not valid: {exc}") from exc
+    else:
+        text = None
+
+    try:
+        if text is not None:
+            type_text(text)
+        else:
+            press_key({"enter": "Return", "tab": "Tab"}[body.what])
+    except TypingUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(status_code=204)
 
 
 @router.post("/{account_id}/close-sign-in", status_code=204)

@@ -97,8 +97,10 @@ export const api = {
     get: (id: number) => request<Account>(`/api/accounts/${id}`),
     create: (body: { store: string; label: string; interval_hours?: number | null }) =>
       post<Account>('/api/accounts', body),
-    update: (id: number, body: Partial<Account> & { totp_secret?: string }) =>
-      patch<Account>(`/api/accounts/${id}`, body),
+    update: (
+      id: number,
+      body: Partial<Account> & { totp_secret?: string; login_email?: string; login_password?: string },
+    ) => patch<Account>(`/api/accounts/${id}`, body),
     remove: (id: number) => request<void>(`/api/accounts/${id}`, { method: 'DELETE' }),
     run: (id: number) => post<{ started: boolean }>(`/api/accounts/${id}/run`),
     clearAttention: (id: number) => post<Account>(`/api/accounts/${id}/clear-attention`),
@@ -110,6 +112,9 @@ export const api = {
         `/api/accounts/${id}/can-sign-in-here`,
       ),
     closeSignIn: (id: number) => post<void>(`/api/accounts/${id}/close-sign-in`),
+    // Type a stored detail into the sign-in window on the container's screen.
+    typeIntoScreen: (id: number, what: 'email' | 'password' | 'code' | 'enter' | 'tab') =>
+      post<void>(`/api/accounts/${id}/type`, { what }),
     canOpenLive: (id: number) =>
       request<{ ok: boolean; reason: string | null }>(`/api/live/${id}/can-open`),
   },
@@ -140,9 +145,12 @@ export const api = {
 
   screen: {
     available: () =>
-      request<{ ok: boolean; reason: string | null; holders?: Record<string, string> }>(
-        '/api/screen/available',
-      ),
+      request<{
+        ok: boolean
+        reason: string | null
+        holders?: Record<string, string>
+        typing?: boolean
+      }>('/api/screen/available'),
   },
 
   diagnostics: {

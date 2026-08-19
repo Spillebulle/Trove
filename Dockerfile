@@ -63,7 +63,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl tini gosu \
-        xvfb x11vnc \
+        xvfb x11vnc xdotool \
         libgl1-mesa-dri libegl-mesa0 libgles2 libglx-mesa0 mesa-vulkan-drivers libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 

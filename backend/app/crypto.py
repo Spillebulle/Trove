@@ -89,3 +89,30 @@ def decrypt(stored: str | None) -> Any:
 
 def is_encrypted(stored: str | None) -> bool:
     return stored is not None and stored.startswith(_PREFIX)
+
+
+def totp_code(secret: str, at: float | None = None, digits: int = 6, period: int = 30) -> str:
+    """The current RFC 6238 code for a base32 authenticator secret.
+
+    Implemented here rather than imported: it is twelve lines, and it is the
+    one piece of the sign-in a store's own "authenticator app" page gives the
+    user in plain text. Accepts the secret as most apps show it - with spaces,
+    lower case, missing padding.
+    """
+    import base64
+    import hashlib
+    import hmac
+    import struct
+    import time
+
+    cleaned = "".join(secret.split()).upper().replace("-", "")
+    cleaned += "=" * (-len(cleaned) % 8)
+    try:
+        key = base64.b32decode(cleaned, casefold=True)
+    except Exception as exc:
+        raise ValueError("not base32") from exc
+    counter = int((time.time() if at is None else at) // period)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    number = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(number % (10**digits)).zfill(digits)

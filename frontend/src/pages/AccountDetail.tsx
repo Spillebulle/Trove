@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
+import { CornerDownLeft, ExternalLink, KeyRound, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import {
@@ -122,6 +122,21 @@ export function AccountDetail() {
       }
       refresh()
     },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  // Can Trove type into the screen for them? Only asked once the screen is
+  // the route in; on a desktop the person has their own password manager.
+  const screenInfo = useQuery({
+    queryKey: ['screen-available'],
+    queryFn: api.screen.available,
+    enabled: localSignIn.data?.via === 'screen',
+    staleTime: 5 * 60_000,
+  })
+
+  const typeInto = useMutation({
+    mutationFn: (what: 'email' | 'password' | 'code' | 'enter' | 'tab') =>
+      api.accounts.typeIntoScreen(accountId, what),
     onError: (error: Error) => push(error.message, 'critical'),
   })
 
@@ -365,6 +380,97 @@ export function AccountDetail() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
+        {/*
+         * The store's sign-in details, for the screen view only. Stored
+         * encrypted, typed into the sign-in window when the person presses a
+         * button there, and never used by a run: a scheduled login with a
+         * stored password is exactly what a store's bot detection looks for,
+         * and the whole design is sessions rather than logins. This is the
+         * password-manager half of signing in through a remote picture, so
+         * that answering a captcha is the only thing that needs a person.
+         */}
+        <Panel title="Store sign-in details">
+          <div className="flex flex-col gap-3">
+            <p className="text-small text-dim">
+              Optional. When you sign in on Trove&rsquo;s screen, these are typed
+              into the form for you at the press of a button, the way a password
+              manager would. They are encrypted at rest and never used to sign in
+              on a schedule; a claim run still needs the session you made by hand.
+            </p>
+            <Field label="Email" hint={data.login_email ? `Stored: ${data.login_email}` : 'Not stored.'}>
+              <input
+                className="field"
+                type="email"
+                autoComplete="off"
+                defaultValue={data.login_email ?? ''}
+                placeholder="you@example.com"
+                onBlur={(event) => {
+                  const value = event.target.value.trim()
+                  if (value !== (data.login_email ?? '')) update.mutate({ login_email: value })
+                }}
+              />
+            </Field>
+            <Field
+              label="Password"
+              hint={data.has_login_password ? 'Stored. Type a new one to replace it, or clear the field to forget it.' : 'Not stored.'}
+            >
+              <input
+                className="field"
+                type="password"
+                autoComplete="new-password"
+                placeholder={data.has_login_password ? '••••••••' : ''}
+                onBlur={(event) => {
+                  const value = event.target.value
+                  if (value) {
+                    update.mutate({ login_password: value })
+                    event.target.value = ''
+                  }
+                }}
+              />
+            </Field>
+            {data.has_login_password && (
+              <button
+                type="button"
+                className="btn-ghost self-start"
+                onClick={() => update.mutate({ login_password: '' })}
+              >
+                Forget the password
+              </button>
+            )}
+            <Field
+              label="Authenticator secret"
+              hint={
+                data.has_totp
+                  ? 'Stored. Trove can type the current code for you.'
+                  : 'The "manual entry key" the store shows when you add an authenticator app. Optional.'
+              }
+            >
+              <input
+                className="field"
+                type="password"
+                autoComplete="off"
+                placeholder={data.has_totp ? '••••••••' : 'ABCD EFGH IJKL MNOP'}
+                onBlur={(event) => {
+                  const value = event.target.value.trim()
+                  if (value) {
+                    update.mutate({ totp_secret: value })
+                    event.target.value = ''
+                  }
+                }}
+              />
+            </Field>
+            {data.has_totp && (
+              <button
+                type="button"
+                className="btn-ghost self-start"
+                onClick={() => update.mutate({ totp_secret: '' })}
+              >
+                Forget the authenticator secret
+              </button>
+            )}
+          </div>
+        </Panel>
+
         <Panel title="Settings">
           <div className="flex flex-col">
             <Toggle
@@ -615,6 +721,52 @@ export function AccountDetail() {
                 refresh()
               }}
               footer={
+                <>
+                  {/* The password-manager half: click a field on the screen,
+                      press the button, Trove types it there. Enter is the
+                      one key worth a button, so the hands can stay on this
+                      side of the picture. */}
+                  {screenInfo.data?.typing && (
+                    <span className="flex flex-wrap items-center gap-1">
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={!data.login_email || typeInto.isPending}
+                        title={data.login_email ? `Type ${data.login_email} into the field you clicked.` : 'No email stored; see Store sign-in details below.'}
+                        onClick={() => typeInto.mutate('email')}
+                      >
+                        Email
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={!data.has_login_password || typeInto.isPending}
+                        title={data.has_login_password ? 'Type the stored password into the field you clicked.' : 'No password stored; see Store sign-in details below.'}
+                        onClick={() => typeInto.mutate('password')}
+                      >
+                        <KeyRound className="size-icon" />
+                        Password
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={!data.has_totp || typeInto.isPending}
+                        title={data.has_totp ? 'Type the current authenticator code.' : 'No authenticator secret stored.'}
+                        onClick={() => typeInto.mutate('code')}
+                      >
+                        Code
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={typeInto.isPending}
+                        title="Press Enter on the screen."
+                        onClick={() => typeInto.mutate('enter')}
+                      >
+                        <CornerDownLeft className="size-icon" />
+                      </button>
+                    </span>
+                  )}
                 <button
                   type="button"
                   className="btn-secondary"
@@ -629,6 +781,7 @@ export function AccountDetail() {
                   {closeSignIn.isPending ? <Spinner /> : null}
                   Done, close the window
                 </button>
+                </>
               }
             />
           )}

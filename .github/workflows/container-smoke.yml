@@ -133,6 +133,15 @@ jobs:
           if grep -Eq -- '--remote-debugging|--enable-automation|--headless' cmdline.txt; then
             echo "::error::automation flags on the un-driven window"; exit 1
           fi
+          echo "--- typing stored sign-in details into the window (xdotool through the X server)"
+          curl -fsS -b "$jar" -X PATCH -H 'content-type: application/json' \
+            -d '{"login_email":"smoke@example.com","login_password":"not-a-real-password","totp_secret":"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"}' \
+            "http://127.0.0.1:8080/api/accounts/$id" | python3 -c 'import json,sys; a=json.load(sys.stdin); print("stored:", a.get("login_email"), a.get("has_login_password"), a.get("has_totp"))'
+          for what in email tab password code enter; do
+            printf '%s -> ' "$what"
+            curl -sS -b "$jar" -X POST -H 'content-type: application/json' -d "{\"what\":\"$what\"}" \
+              "http://127.0.0.1:8080/api/accounts/$id/type" -o /dev/null -w '%{http_code}\n'
+          done
           echo "--- a picture of the container's screen, through its VNC port"
           # A throwaway VNC client in a second container sharing trove's
           # network namespace, so localhost:5900 is reachable without ever

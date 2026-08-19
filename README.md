@@ -91,7 +91,11 @@ and for simple sign-ins, but a store that puts up an interactive captcha may
 refuse it no matter how honestly you click, because a page can tell that
 protocol is attached.
 
-Trove never asks for a store password, and there is nowhere to put one.
+Trove never signs in with a store password on its own. You *can* store the
+account's email, password and authenticator secret (encrypted) so that when
+you sign in on the container's screen, Trove types them into the form at the
+press of a button, the way a password manager would - which leaves the captcha
+as the only thing that needs you. Nothing that runs on a schedule can read them.
 
 **It needs real Google Chrome.** Playwright's bundled Chromium ships without
 H.264, HEVC and AAC while telling every site it is Chrome, and Cloudflare's

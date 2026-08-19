@@ -9,6 +9,7 @@ browser cache.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -76,7 +77,16 @@ class AccountUpdate(BaseModel):
     enabled: bool | None = None
     interval_hours: int | None = None
     totp_secret: str | None = None
+    # Write-only. An empty string clears; a missing key leaves it alone.
+    login_email: str | None = None
+    login_password: str | None = None
     notes: str | None = None
+
+
+class TypeRequest(BaseModel):
+    """What to type into the sign-in window on the container's screen."""
+
+    what: Literal["email", "password", "code", "enter", "tab"]
 
 
 class AccountRead(Read):
@@ -94,6 +104,10 @@ class AccountRead(Read):
     next_run_at: datetime | None
     # Whether a TOTP secret is stored, never the secret itself.
     has_totp: bool
+    # The stored sign-in email, so the person can see which account it is; the
+    # password only as a yes/no.
+    login_email: str | None = None
+    has_login_password: bool = False
     notes: str | None
     created_at: datetime | None
     # Counts for the account card, so the list page does not need one request

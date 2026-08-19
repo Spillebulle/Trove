@@ -76,10 +76,15 @@ def _migrate(engine) -> None:
     release goes in this table, checked against `PRAGMA table_info` first.
     Idempotent, and safe to run on every start.
 
-    Empty today, because nothing has been released yet. It exists so the first
-    person to add a column finds the pattern rather than inventing one.
+    The first entries are the sign-in details added in 0.1.7; a 0.1.6 database
+    opened by a later build gets them on the first start.
     """
-    additions: dict[str, dict[str, str]] = {}
+    additions: dict[str, dict[str, str]] = {
+        "accounts": {
+            "login_email": "TEXT",
+            "login_password": "TEXT",
+        },
+    }
     with engine.begin() as conn:
         for table, columns in additions.items():
             existing = [

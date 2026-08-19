@@ -51,6 +51,18 @@ rest like everything else. Automating a store login can breach that store's
 terms of service; the app is for the user's own accounts on their own machine,
 and the README should say so plainly rather than pretending otherwise.
 
+**On stored store credentials (0.1.7).** An account *may* hold an encrypted
+sign-in email, password and TOTP secret, and the rule about them is narrow
+and must stay narrow: they are typed into the un-driven sign-in window on the
+container's screen **when the person presses a button** (`POST
+/api/accounts/{id}/type`, which refuses unless that account's own sign-in
+window is open), the way a password manager types into a form. **No run, no
+scheduler, no adapter may ever read them.** They exist so that, signing in
+through a remote picture, the captcha is the only thing that needs a person
+and a forty-character generated password is not typed key by key. A stored
+password used to log in unattended would be the thing bot detection is
+looking for, and it would undo the design; this is not that.
+
 ## Design
 
 UI follows `../Design-Principles/STYLE-GUIDE.md` and uses its `tokens.css`;
@@ -299,7 +311,18 @@ interface knows whether to expect a window or to open the screen dialog.
 `close-sign-in` terminates that Chrome politely, because the screen has no
 window manager and there may be nothing to click. The smoke workflow opens
 and closes one and reads its command line back: no `--remote-debugging`, no
-`--enable-automation`, no `--headless`.
+`--enable-automation`, no `--headless`. The window opens `--start-fullscreen`
+(F11, not kiosk) so the small picture is all page and the address bar and
+the `--no-sandbox` infobar are out of the way.
+
+**Typing into that window** is `keyboard.py`: `xdotool type --file -` through
+the X server (XTEST) into the focused window, which on that screen is the
+un-driven Chrome; the text goes on stdin, never argv. `POST
+/api/accounts/{id}/type` with `email | password | code | enter | tab` types
+the stored detail (the TOTP code is computed in `crypto.totp_code`, RFC 6238,
+checked against the RFC's vectors) and the screen view has a button per
+item. It works only while that account's sign-in window holds the profile and
+only where there is a DISPLAY and xdotool, which is the container.
 
 Why VNC here when the live view was deliberately *not* VNC: the live view's
 objection to noVNC was a second process for a picture CDP already provided.
@@ -694,7 +717,9 @@ session trusting something nobody has run.
 
 - Storing store passwords and logging in on every run. It is the thing bot
   detection is looking for, and it is what turns a missed claim into a locked
-  account.
+  account. (The stored sign-in details of 0.1.7 are not this: they are typed
+  at the person's request into their own sign-in window, and nothing that
+  runs unattended can read them. Keep it that way.)
 - Running the browser headless because it is easier in Docker. Measure it before
   relying on it.
 - Retrying a failed claim in a loop. One attempt, then the attention queue.

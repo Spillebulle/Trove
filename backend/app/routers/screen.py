@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 
@@ -59,7 +61,13 @@ def screen_available() -> dict:
             "ok": False,
             "reason": "No VNC server is configured for Trove's display (VNC_ADDRESS is unset).",
         }
-    return {"ok": True, "reason": None, "holders": manager.holders()}
+    return {
+        "ok": True,
+        "reason": None,
+        "holders": manager.holders(),
+        # Whether the "type it for me" buttons can work: a display and xdotool.
+        "typing": bool(os.environ.get("DISPLAY")) and shutil.which("xdotool") is not None,
+    }
 
 
 @router.websocket("/screen")
