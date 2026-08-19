@@ -599,6 +599,8 @@ class BrowserManager:
             raise
         entry.process = process
 
+        opened_at = asyncio.get_event_loop().time()
+
         async def _wait() -> None:
             try:
                 # Polled rather than awaited: `Popen` is not an asyncio object,
@@ -606,6 +608,19 @@ class BrowserManager:
                 # thread that outlives the window on a shutdown.
                 while process.poll() is None:
                     await asyncio.sleep(2)
+                # A window nobody could have used. Chrome dying on launch -
+                # the sandbox, a missing library, a display that is not there -
+                # looks from the interface like a window that was closed at
+                # once, so say what happened where somebody will read it.
+                if asyncio.get_event_loop().time() - opened_at < 4:
+                    logger.warning(
+                        "The sign-in window for account %s exited within seconds "
+                        "(exit code %s). Chrome did not come up; in a container "
+                        "this is usually the sandbox, the display or a missing "
+                        "library. `python -m app.diagnose` will say which.",
+                        account_id,
+                        process.returncode,
+                    )
             finally:
                 entry.lease = None
                 entry.process = None

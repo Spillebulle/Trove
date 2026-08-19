@@ -67,8 +67,10 @@ if [ "${TROVE_HEADLESS}" != "true" ]; then
     # extension misses those updates, which shows as a picture that stops
     # moving. -forever -shared: more than one viewer, and the server outlives
     # each of them. -nopw is deliberate, see above.
+    # -xkb: map the keysyms noVNC sends through XKB, so keys that are not on
+    # the X server's default US keymap (an umlaut, a dead key) still arrive.
     x11vnc -display "${DISPLAY}" -localhost -rfbport "${vnc_port}" -nopw \
-      -forever -shared -noxdamage -repeat -quiet -bg >/dev/null 2>&1 \
+      -forever -shared -noxdamage -repeat -xkb -quiet -bg >/dev/null 2>&1 \
       || echo "x11vnc did not start; the screen view will not work." >&2
   fi
 fi
