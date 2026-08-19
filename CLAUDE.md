@@ -403,8 +403,13 @@ Remove-Item -Recurse -Force backend/app/static -ErrorAction SilentlyContinue
 Copy-Item -Recurse frontend/dist backend/app/static
 
 # --- Docker ------------------------------------------------------------------
-docker compose up -d --build
+# The published image, amd64 only. `:main` is the tip of the branch and is what
+# to use while the first Linux deployment is still being debugged.
+docker compose pull; docker compose up -d
 docker compose logs -f trove
+
+# Building it locally instead (put `build: .` back in docker-compose.yml):
+docker compose up -d --build
 ```
 
 **Run uvicorn from the repository root**, not from `backend/`. `.env` and
@@ -477,12 +482,21 @@ session trusting something nobody has run.
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in
   account to be meaningful.
-- **The Docker image, entirely.** Never built: there is no Docker on this
-  machine. Reading it found three faults that would have bitten (the missing
-  `xdpyinfo`, the sign-in button offering itself in a container, and Chrome
-  needing `--no-sandbox` there), which is a good reason to expect more. Nothing
-  about the container is verified, including whether `gosu` and `usermod` are
-  present in the Playwright base image and whether Chrome starts as `pwuser`.
+- **The Docker image, when actually run.** It now *builds* - GitHub Actions
+  publishes `ghcr.io/spillebulle/trove` on every push to main and on a `v*`
+  tag - and its contents were checked by reading the config blob back out of
+  the registry: `IN_CONTAINER=true` and `DISPLAY=:99` are set, the entrypoint
+  is tini, the healthcheck is present, and the `playwright install --with-deps
+  chrome` layer succeeded. So `gosu`, `usermod` and Chrome's install all exist
+  in the base image, which was the open question.
+
+  **No container has been started from it.** Building is not running: Xvfb
+  coming up, Chrome launching as `pwuser` with `--no-sandbox`, the PUID/PGID
+  remap against a bind-mounted volume, and whether a claim run works at all in
+  there are every one of them untested. Reading the Dockerfile found three
+  faults before it was ever built (the missing `xdpyinfo`, the sign-in button
+  offering itself in a container, Chrome needing `--no-sandbox`); expect the
+  first real `docker compose up` to find more.
 - **That the mouse fix makes a Turnstile checkbox pass.** It does not, on its
   own: the checkbox still looped after it, and the codec fingerprint was the
   real cause. The defect it fixed was real - every pointer move was arriving as
