@@ -144,6 +144,13 @@ class Settings(BaseSettings):
 
     # Set by the Dockerfile. There is no reason to set it by hand.
     in_container: bool = False
+    # In a container Chrome is launched with --no-sandbox, because its own
+    # sandbox usually cannot start under the default seccomp profile and the
+    # failure reads as "Chrome is not usable" (see browser.CONTAINER_ARGS).
+    # Set false to try without: if Chrome comes up, the infobar across the top
+    # of the screen view goes away and the browser's own sandbox is back. The
+    # smoke workflow probes this on every run and prints the answer.
+    container_no_sandbox: bool = True
 
     # --- The container's screen ------------------------------------------
     #

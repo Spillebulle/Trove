@@ -89,17 +89,6 @@ LAUNCH_ARGS = [
 # between the Playwright launch and the un-driven sign-in window, because both
 # draw on the same Xvfb display and both fall over in the same ways without it.
 CONTAINER_ARGS = [
-    # Chrome's setuid sandbox needs user namespaces the default container
-    # seccomp profile does not grant, so in a container it usually refuses to
-    # start at all. That failure is worse than it sounds here: `resolve_channel`
-    # would read it as "Chrome is not usable", fall back to the bundled
-    # Chromium, and quietly leave the install unable to answer a captcha.
-    #
-    # The isolation being dropped is the browser's own, inside a container that
-    # is already the isolation boundary, and the pages being opened are two
-    # storefronts. Not added on a desktop, where the sandbox works and is worth
-    # having.
-    "--no-sandbox",
     # **Give the browser a GPU, even a software one.** Under Xvfb there is no
     # GPU, and Chrome's answer to that is to switch WebGL off and report no
     # WebGPU adapter at all - "No available adapters." was the exact line a
@@ -118,6 +107,20 @@ CONTAINER_ARGS = [
     "--ignore-gpu-blocklist",
     "--enable-unsafe-webgpu",
 ]
+
+if settings.in_container and settings.container_no_sandbox:
+    # Chrome's setuid sandbox needs user namespaces the default container
+    # seccomp profile does not grant, so in a container it usually refuses to
+    # start at all. That failure is worse than it sounds here: `resolve_channel`
+    # would read it as "Chrome is not usable", fall back to the bundled
+    # Chromium, and quietly leave the install unable to answer a captcha.
+    #
+    # The isolation being dropped is the browser's own, inside a container that
+    # is already the isolation boundary, and the pages being opened are two
+    # storefronts. Not added on a desktop, where the sandbox works and is worth
+    # having. `CONTAINER_NO_SANDBOX=false` turns it off to find out whether
+    # this container can do without; the smoke workflow asks on every run.
+    CONTAINER_ARGS.insert(0, "--no-sandbox")
 
 if settings.in_container:
     LAUNCH_ARGS.extend(CONTAINER_ARGS)
