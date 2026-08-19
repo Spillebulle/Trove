@@ -20,8 +20,10 @@
  * Trove user can ever see a store session.
  */
 import { useEffect, useRef, useState } from 'react'
+import { ClipboardPaste } from 'lucide-react'
 import RFB from '@novnc/novnc'
 import { screenSocketUrl } from '@/lib/api'
+import { useToast } from '@/lib/app-context'
 import { Spinner } from './ui'
 
 type Phase = 'connecting' | 'live' | 'closed' | 'error'
@@ -37,6 +39,27 @@ export function ScreenView({
   const rfbRef = useRef<RFB | null>(null)
   const [phase, setPhase] = useState<Phase>('connecting')
   const [message, setMessage] = useState<string | null>(null)
+  const { push } = useToast()
+
+  // Hand the browser on the other side what is on this clipboard, so a
+  // password from a manager can be pasted there with Ctrl+V rather than typed
+  // key by key through a remote screen. It goes over the VNC connection as a
+  // cut-text message and lands in the X selection; nothing is logged or kept.
+  const pasteClipboard = async () => {
+    const rfb = rfbRef.current
+    if (!rfb) return
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text) {
+        push('Your clipboard is empty.', 'neutral')
+        return
+      }
+      rfb.clipboardPasteFrom(text)
+      push('Sent to the screen. Press Ctrl+V in the field over there.', 'good')
+    } catch {
+      push('This browser would not share the clipboard. Type it instead.', 'neutral')
+    }
+  }
 
   useEffect(() => {
     const host = hostRef.current
@@ -122,6 +145,16 @@ export function ScreenView({
           Sign in, answer what the store asks, then close the window. Trove
           keeps the session and never sees your password.
         </p>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => void pasteClipboard()}
+          disabled={phase !== 'live'}
+          title="Send what is on your clipboard to the screen, so you can Ctrl+V it there."
+        >
+          <ClipboardPaste className="size-icon" />
+          Paste
+        </button>
         {footer}
       </div>
     </div>
