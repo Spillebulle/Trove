@@ -23,7 +23,14 @@ from ..auth import SESSION_USER_KEY, current_user
 from ..browser import VIEWPORT, ProfileBusy, manager
 from ..config import get_settings
 from ..db import SessionLocal, get_db
-from ..live import LiveTarget, frame_message, hosts_for, open_session, prepare
+from ..live import (
+    MIN_FRAME_INTERVAL_S,
+    LiveTarget,
+    frame_bytes,
+    hosts_for,
+    open_session,
+    prepare,
+)
 from ..models import Account
 
 logger = logging.getLogger(__name__)
@@ -134,20 +141,50 @@ async def live(websocket: WebSocket, account_id: int) -> None:
 
 
 async def _pump_frames(websocket: WebSocket, session) -> None:
-    """Frames out, acknowledged only once they have been sent.
+    """Frames out, acknowledged once they have been sent and the rate allows.
 
     The acknowledgement is what asks Chromium for the next frame, so doing it
     here rather than in the CDP callback is what makes the stream self-pacing:
     a slow socket simply receives fewer frames instead of building a backlog.
+
+    **And it is what caps the frame rate.** Acknowledging the instant a frame
+    went out asks Chromium to render again immediately, so a page with any
+    animation on it renders flat out: measured at 113 frames a second and
+    7.7 MB/s on the Epic store, which is 62 Mbit/s and further behind every
+    second over anything but a LAN. Holding the acknowledgement back to
+    `MIN_FRAME_INTERVAL_S` bounds the whole pipeline at its source, before a
+    frame is ever encoded.
+
+    The frame itself is still sent the moment it arrives; only the request for
+    the *next* one waits. Delaying the send instead would add latency to the
+    picture the user is looking at now, which is the opposite of the point.
     """
+    loop = asyncio.get_event_loop()
+    last_ack = 0.0
     while True:
         params = await session.frames.get()
         try:
-            await websocket.send_json(frame_message(params))
+            # Sent as a **binary** message, not base64 inside JSON. Chromium
+            # hands the frame over base64-encoded, so re-encoding it into JSON
+            # kept the 33 % inflation and added a large string allocation per
+            # frame at both ends. The client decodes the bytes with
+            # `createImageBitmap`, which is cheaper than a data URL as well.
+            #
+            # Control messages stay JSON; the client tells them apart by type,
+            # which is what `binaryType = 'arraybuffer'` makes unambiguous.
+            await websocket.send_bytes(frame_bytes(params))
         except (WebSocketDisconnect, RuntimeError):
             return
+        except ValueError:
+            # A frame that will not decode is one frame, not a reason to end
+            # the session. Acknowledge it so Chromium sends the next.
+            logger.debug("Dropped a screencast frame that would not decode.")
         session_id = params.get("sessionId")
         if session_id is not None:
+            wait = MIN_FRAME_INTERVAL_S - (loop.time() - last_ack)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            last_ack = loop.time()
             await session.ack(session_id)
 
 

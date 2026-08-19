@@ -100,6 +100,27 @@ class Settings(BaseSettings):
     # sit there holding a profile lock forever.
     live_idle_timeout_s: int = 600
 
+    # --- The live view's picture -----------------------------------------
+    #
+    # These two decide the bandwidth, and the default used to be "as fast as
+    # possible", which is not a setting anybody chose. The screencast sends one
+    # frame per acknowledgement, Trove acknowledged immediately, and a store
+    # page with a carousel on it therefore rendered flat out: **measured at 113
+    # frames a second and 7.7 MB/s**, or 62 Mbit/s, which no home upstream link
+    # survives. It presents as the picture lagging further and further behind,
+    # because the frames queue in buffers between here and the browser.
+    #
+    # Twelve is enough to sign in and answer a captcha, and it is what a remote
+    # desktop feels like rather than what a video feels like. Raise it on a LAN.
+    live_max_fps: int = 12
+    # JPEG quality. A store page is text and flat colour, which JPEG handles
+    # well; 50 is visibly fine and about a third smaller than 60.
+    live_quality: int = 50
+    # The frame's longest side. The viewport stays 1280x800 - this only scales
+    # the picture of it, so clicks are unaffected - and 1024 is a third fewer
+    # bytes again for something nobody is reading text off.
+    live_max_width: int = 1024
+
     # --- Schedule --------------------------------------------------------
     # The default gap between runs for an account that does not set its own.
     # Hours, not minutes: CLAUDE.md's human cadence, and a store's weekly

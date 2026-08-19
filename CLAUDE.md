@@ -135,13 +135,42 @@ Two additions neither sibling has, both now built:
      the scaling; the element box is then the drawn area and the mapping is
      exact. `scratchpad`-style measurement beats eyeballing it: the error is
      invisible until it is printed.
-  5. **Focus the keyboard sink with `preventScroll`.** Focusing an element
+  5. **Acknowledging a frame immediately means rendering flat out.** Chromium
+     sends one frame per `Page.screencastFrameAck`, so acking the instant a
+     frame is sent asks for the next one at once, and a store page with a
+     carousel renders as fast as the machine can. **Measured on the Epic store:
+     113 frames a second and 7.7 MB/s, which is 62 Mbit/s.** On a LAN nobody
+     notices; over the internet the frames queue in buffers and the picture
+     falls further behind every second, which is what "huge delay" turns out to
+     mean.
+
+     The cap is the *acknowledgement*, not the send: hold it to
+     `MIN_FRAME_INTERVAL_S` and the whole pipeline is bounded at its source,
+     before a frame is ever encoded. Delaying the send instead would add
+     latency to the picture on screen now, which is backwards. Re-measured
+     after: 11 fps and 431 kB/s, eighteen times less traffic, and signing in
+     feels the same. `live_max_fps`, `live_quality` and `live_max_width` are
+     the knobs; raise them on a LAN.
+  6. **Pointer moves must be coalesced.** A browser fires `pointermove` at 60
+     to 120 Hz and each one became an `Input.dispatchMouseEvent` on the *same*
+     CDP channel the frame acknowledgements use, so moving the mouse competed
+     with the picture. Keep the newest and flush it on `requestAnimationFrame`;
+     the intermediate positions describe a path nothing reads. A press or a
+     release flushes the queued move first, so the button never lands at a
+     stale position.
+  7. **Frames go over the socket as binary.** Chromium hands them over base64,
+     and forwarding that inside JSON kept the 33 % inflation plus a large
+     string allocation per frame at both ends. Decode once on the server,
+     `send_bytes`, and let the client use `createImageBitmap`, which decodes
+     off the main thread. Control messages stay JSON and the client tells them
+     apart by payload type.
+  8. **Focus the keyboard sink with `preventScroll`.** Focusing an element
      scrolls it into view, and the off-screen textarea sat at `left: -9999px`,
      so a press could scroll its own container and move the canvas out from
      under the pointer between `pointerdown` and `pointerup`. It now lives at
      the container's origin at 1px with `pointer-events-none`, and is focused
      with `{ preventScroll: true }`.
-  6. **A mouse move must not carry a button.** `MouseEvent.button` is `-1` on a
+  9. **A mouse move must not carry a button.** `MouseEvent.button` is `-1` on a
      move where nothing changed, and the first version looked that up in a table
      of button names with `left` as the default. Chromium derives `buttons` from
      `button` when the field is absent, so **every pointer movement arrived at

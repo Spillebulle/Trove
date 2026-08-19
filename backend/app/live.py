@@ -51,18 +51,28 @@ settings = get_settings()
 
 # Screencast settings. 60 is a deliberate quality: a store page is text and
 # flat colour, which JPEG handles well, and the difference between 60 and 90 is
-# about 2.5x the bytes for a picture nobody is inspecting. The frame size is
-# the viewport's, so the client can map a click without asking anything.
+# about 2.5x the bytes for a picture nobody is inspecting. Measured on the Epic
+# store, a frame at these settings is about 17 kB, so ten frames a second is
+# under 2 Mbit/s - bandwidth has never been what made this feel slow. The frame
+# size is the viewport's, so the client can map a click without asking anything.
 SCREENCAST = {
     "format": "jpeg",
-    "quality": 60,
-    "maxWidth": VIEWPORT["width"],
-    "maxHeight": VIEWPORT["height"],
+    "quality": settings.live_quality,
+    "maxWidth": settings.live_max_width,
+    "maxHeight": int(settings.live_max_width * VIEWPORT["height"] / VIEWPORT["width"]),
     # Drop frames rather than queue them when the socket is slower than the
     # page. A live view that is three seconds behind is worse than one that
-    # skipped the animation.
+    # skipped the animation. The rate itself is capped by pacing the
+    # acknowledgement - see `MIN_FRAME_INTERVAL_S`.
     "everyNthFrame": 1,
 }
+
+# The floor on the gap between frames. This is the whole frame-rate cap.
+#
+# Chromium sends exactly one more frame per acknowledgement, so the moment the
+# acknowledgement is paced, the render rate is too - which is cheaper than
+# throwing frames away after they have been encoded and sent.
+MIN_FRAME_INTERVAL_S = 1.0 / max(1, settings.live_max_fps)
 
 # The keys that are not text. Everything else goes through `insertText`, so
 # this list is short by design and is the whole of the keyboard mapping.
@@ -85,9 +95,6 @@ CONTROL_KEYS: dict[str, tuple[int, str]] = {
     "Delete": (46, "Delete"),
 }
 
-# DOM `MouseEvent.button` to CDP's name. `-1` is what a pointer *move* carries
-# when no button changed, and it is deliberately absent: a move is resolved
-# through `_button_for` below rather than through this table.
 async def enable_focus(cdp: CDPSession) -> None:
     """Tell the renderer the page is focused, whatever the window manager says.
 
@@ -117,6 +124,9 @@ async def enable_focus(cdp: CDPSession) -> None:
         logger.debug("Focus emulation is unavailable: %s", exc)
 
 
+# DOM `MouseEvent.button` to CDP's name. `-1` is what a pointer *move* carries
+# when no button changed, and it is deliberately absent: a move is resolved
+# through `_button_for` below rather than through this table.
 _MOUSE_BUTTONS = {0: "left", 1: "middle", 2: "right", 3: "back", 4: "forward"}
 
 
@@ -189,10 +199,11 @@ class LiveSession:
         self.page = page
         self.target = target
         self.cdp: CDPSession | None = None
-        # Bounded, and small. If the socket cannot keep up, the right thing is
-        # to drop the oldest frame and show the newest: an unbounded queue in
-        # front of a slow client turns into minutes of latency and then memory.
-        self.frames: asyncio.Queue[dict] = asyncio.Queue(maxsize=2)
+        # Exactly one. If the socket cannot keep up, the right thing is to
+        # drop the stale frame and show the newest; an unbounded queue in front
+        # of a slow client turns into minutes of latency and then memory, and
+        # even a queue of two guarantees the picture is a frame behind.
+        self.frames: asyncio.Queue[dict] = asyncio.Queue(maxsize=1)
         self.last_input = asyncio.get_event_loop().time()
 
     async def start(self) -> None:
@@ -339,22 +350,20 @@ class LiveSession:
         self.touch()
 
 
-def frame_message(params: dict) -> dict:
-    """One screencast frame, as the client wants it.
+def frame_bytes(params: dict) -> bytes:
+    """One screencast frame as raw JPEG bytes.
 
-    The metadata Chromium sends alongside is dropped except for the size. The
-    viewport is fixed (`browser.VIEWPORT`) so the client can scale a click by
-    the ratio of its canvas to that, and the per-frame device metrics would
-    only give it a second, sometimes-disagreeing answer.
+    Chromium delivers it base64-encoded inside the CDP event. Decoding it here
+    and sending binary costs one decode on the server and saves the 33 %
+    inflation on the wire, a large string allocation per frame at both ends,
+    and a data-URL parse in the browser.
+
+    No metadata travels with it. The viewport is fixed (`browser.VIEWPORT`) and
+    stated once at connect, so the client can scale a click by the ratio of its
+    canvas to that; per-frame device metrics would only give it a second,
+    sometimes-disagreeing answer.
     """
-    metadata = params.get("metadata") or {}
-    return {
-        "type": "frame",
-        "data": params.get("data", ""),
-        "width": VIEWPORT["width"],
-        "height": VIEWPORT["height"],
-        "scroll": metadata.get("scrollOffsetY", 0),
-    }
+    return base64.b64decode(params.get("data") or "")
 
 
 async def open_session(target: LiveTarget):

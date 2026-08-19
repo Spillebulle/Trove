@@ -93,49 +93,66 @@ export function LiveBrowser({
     const socket = new WebSocket(liveSocketUrl(accountId))
     socketRef.current = socket
 
-    // The decoder is reused across frames. A new Image per frame is a new
-    // decode job per frame and, at a dozen a second, enough garbage to show as
-    // a stutter in the stream it is meant to be drawing.
-    const image = new Image()
-    let pending: string | null = null
+    socket.binaryType = 'arraybuffer'
+
+    /*
+     * Frames arrive as raw JPEG bytes and are decoded with
+     * `createImageBitmap`, which decodes off the main thread. The previous
+     * version built a `data:image/jpeg;base64,...` URL per frame and waited on
+     * `Image.onload`: that is a large string allocation, a URL parse and a
+     * main-thread decode for every frame, all of which the binary path skips.
+     *
+     * Only the newest frame is ever drawn. If a decode is already running, the
+     * arriving frame replaces whatever was waiting rather than joining a
+     * queue - a live view that is behind is worse than one that skipped.
+     */
+    let pending: ArrayBuffer | null = null
     let drawing = false
 
-    const draw = () => {
+    const draw = async () => {
       if (pending === null || drawing) return
       drawing = true
       const data = pending
       pending = null
-      image.onload = () => {
+      try {
+        const bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' }))
         const canvas = canvasRef.current
         const context = canvas?.getContext('2d')
         if (canvas && context) {
-          canvas.width = remoteRef.current.width
-          canvas.height = remoteRef.current.height
-          context.drawImage(image, 0, 0, canvas.width, canvas.height)
+          // Only on a change. Assigning to `width` reallocates the backing
+          // store and clears the canvas, so doing it per frame threw away a
+          // 1280x800 buffer sixty times a second for nothing.
+          const { width, height } = remoteRef.current
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width
+            canvas.height = height
+          }
+          context.drawImage(bitmap, 0, 0, width, height)
         }
-        drawing = false
-        draw()
+        bitmap.close()
+      } catch {
+        // One frame that will not decode is not worth ending the stream over.
       }
-      image.onerror = () => {
-        drawing = false
-        draw()
-      }
-      image.src = `data:image/jpeg;base64,${data}`
+      drawing = false
+      void draw()
     }
 
     socket.onmessage = (event) => {
+      // Binary is a frame; text is a control message. Nothing else is sent, so
+      // the type of the payload is the whole discriminator.
+      if (event.data instanceof ArrayBuffer) {
+        // Keep only the newest: an older frame that has not been drawn is a
+        // frame nobody needs to see any more.
+        pending = event.data
+        void draw()
+        return
+      }
       const payload = JSON.parse(event.data as string)
       switch (payload.type) {
         case 'ready':
           remoteRef.current = { width: payload.width, height: payload.height }
           setUrl(payload.url ?? '')
           setPhase('live')
-          break
-        case 'frame':
-          // Keep only the newest: an older frame that has not been drawn is a
-          // frame nobody needs to see any more.
-          pending = payload.data
-          draw()
           break
         case 'status':
         case 'pong':
@@ -183,9 +200,53 @@ export function LiveBrowser({
     }
   }, [])
 
+  /*
+   * Pointer moves are coalesced to one per animation frame.
+   *
+   * A browser fires `pointermove` at the pointer's own rate - 60 Hz, and 120+
+   * on a high-rate mouse - and each one became a WebSocket message and then a
+   * `Input.dispatchMouseEvent` round trip on the *same* CDP channel the
+   * screencast acknowledgements use. Moving the mouse therefore flooded the
+   * pipe the frames come back on, and the picture fell behind for as long as
+   * the pointer kept moving, which is exactly when a person is looking at it.
+   *
+   * Only the newest position matters: the intermediate ones describe a path
+   * nothing reads. Keeping the last and flushing it on the next frame bounds
+   * the rate at the display's, and less when the tab is busy.
+   */
+  const pendingMove = useRef<object | null>(null)
+  const moveScheduled = useRef(false)
+
+  const flushMove = useCallback(() => {
+    moveScheduled.current = false
+    const move = pendingMove.current
+    pendingMove.current = null
+    if (move) send(move)
+  }, [send])
+
   const onPointer = (kind: 'mousePressed' | 'mouseReleased' | 'mouseMoved') =>
     (event: React.PointerEvent) => {
       const { x, y } = toRemote(event)
+      if (kind === 'mouseMoved') {
+        pendingMove.current = {
+          type: 'mouse',
+          event: kind,
+          x,
+          y,
+          button: event.button,
+          buttons: event.buttons,
+          clickCount: 0,
+          modifiers: modifiersOf(event),
+        }
+        if (!moveScheduled.current) {
+          moveScheduled.current = true
+          requestAnimationFrame(flushMove)
+        }
+        return
+      }
+      // A press or a release goes at once, and takes any queued move with it,
+      // so the button never arrives at a stale position.
+      flushMove()
       send({
         type: 'mouse',
         event: kind,
@@ -198,7 +259,9 @@ export function LiveBrowser({
         // moving the pointer across the page into one long drag gesture.
         button: event.button,
         buttons: event.buttons,
-        clickCount: kind === 'mouseMoved' ? 0 : 1,
+        // Only a press or a release reaches here; moves returned above, and
+        // they carry `clickCount: 0` of their own.
+        clickCount: 1,
         modifiers: modifiersOf(event),
       })
       // A click has to put the keyboard somewhere. The hidden field is the only
