@@ -221,9 +221,11 @@ async def sign_in_here(account_id: int, db: Session = Depends(get_db)) -> Accoun
     So this window has no automation on it at all: Trove starts Chrome as a
     plain subprocess and then has no connection to it.
 
-    Only useful where Trove and the person are at the same machine. In a
-    container there is no screen to put a window on, and the live view remains
-    the only option there.
+    On a desktop the window opens in front of the person. In a container it
+    opens on Trove's own display - the Xvfb the entrypoint runs - and the
+    person works it through the screen view (`/api/screen`), which shows that
+    display over VNC. Either way the browser has nothing attached to it; the
+    only difference is where the pixels end up.
     """
     account = db.query(Account).filter(Account.id == account_id).first()
     if account is None:

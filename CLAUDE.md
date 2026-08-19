@@ -584,6 +584,16 @@ session trusting something nobody has run.
 - The screen bridge, against a fake VNC server: the greeting comes through,
   bytes go both ways, and an unauthenticated socket is refused before any
   connection to the VNC port is made.
+- **What the store shows the container's un-driven window, from a datacenter
+  address.** The smoke workflow captures the container's display over its VNC
+  port after "sign in here" (`docs/images/05-container-screen.png`, taken on
+  a GitHub Actions runner): real Chrome on the Xvfb, the Epic store front page
+  fully rendered, a "Sign in" button, and **no Cloudflare interstitial at
+  all** - from an address that is about as datacenter as an address gets. One
+  sample, not a promise; but it is the first time this app has had a picture
+  of a store letting the container in rather than an argument about whether
+  it would. The only blemish is Chrome's own "--no-sandbox" infobar across the
+  top, which the page cannot see and a person can close.
 - **The screen view end to end**, with Trove run as if in a container
   (`IN_CONTAINER=true VNC_ADDRESS=127.0.0.1:5999 DISPLAY=:0`), a minimal RFB
   3.8 server on 5999 and real Chrome driving the built interface: "Sign in
