@@ -277,27 +277,78 @@ Rules that keep it honest:
 
 ## What Docker can and cannot do
 
-Trove runs in a container, but **the first sign-in usually cannot happen
-there**, and that is a property of the design rather than a bug to fix.
+Trove runs in a container, and since the screen view landed **the first
+sign-in can happen there too** - on the container's own display, through a
+browser with nothing attached to it. Whether the store then lets that browser
+in depends on things Trove does not control, chiefly the address, so the
+profile-copy path below is still the fallback.
 
 Works in the container: discovery, the scheduler, the ledger, notifications,
 the whole interface, and claim runs on an account whose session is already
 good. That is the unattended half, which is most of the app's life.
 
-Does not work in the container:
+**"Sign in here" in a container goes through the screen view.** The entrypoint
+puts `x11vnc` on the Xvfb display (`VNC_ADDRESS=127.0.0.1:5900`, localhost,
+no password), `routers/screen.py` bridges Trove's own authenticated WebSocket
+`/api/screen` to that port byte-for-byte, and `components/ScreenView.tsx` is
+noVNC's RFB client drawing it. `sign-in-here` then does exactly what it does
+on a desktop - `launch_detached`, a plain Chrome subprocess with no CDP and no
+automation flags - on `DISPLAY=:99`, and the person works it through the
+screen. `can-sign-in-here` answers `via: "desktop" | "screen"` so the
+interface knows whether to expect a window or to open the screen dialog.
+`close-sign-in` terminates that Chrome politely, because the screen has no
+window manager and there may be nothing to click. The smoke workflow opens
+and closes one and reads its command line back: no `--remote-debugging`, no
+`--enable-automation`, no `--headless`.
 
-- **"Sign in here" is refused**, because it opens a browser window on a screen
-  and the container's only screen is an Xvfb framebuffer nobody is looking at.
-  `settings.has_visible_desktop` is what decides, and it is deliberately not the
-  same question as "is `DISPLAY` set" - the container sets one. Both the button
-  and the endpoint check it; an endpoint that trusts its own UI has no guard.
+Why VNC here when the live view was deliberately *not* VNC: the live view's
+objection to noVNC was a second process for a picture CDP already provided.
+The screen view exists for the opposite reason - to show a browser that has
+**no** CDP on it, which a screencast by definition cannot. They are not two
+ways of doing one thing; the live view is a tab over the protocol, the screen
+is pixels off the X server. `settings.has_visible_desktop` still answers "is
+there a screen in front of the person" and is still false in a container;
+`settings.has_screen_view` is the new, separate question.
+
+**The browser in the container has a GPU now, a software one.** Under Xvfb
+with no GPU, Chrome turns WebGL off and reports no WebGPU adapter, and `No
+available adapters.` is the exact line a Cloudflare challenge logged in the
+live view before refusing every answer. A browser whose user-agent says desktop
+Chrome and whose WebGL does not exist is the same kind of contradiction as the
+codec one. The image installs Mesa (`libgl1-mesa-dri` for llvmpipe,
+`mesa-vulkan-drivers` for lavapipe), Xvfb runs with `+extension GLX`, and
+`browser.CONTAINER_ARGS` adds `--ignore-gpu-blocklist --enable-unsafe-webgpu`
+to both the driven browser and the un-driven window. This is restoring a
+capability the browser is supposed to have, not forging a signal - the same
+principle as driving real Chrome. Measured in the container by the smoke
+workflow: WebGL renderer `ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits),
+OpenGL 4.5)`, WebGPU adapter `google / swiftshader`, H.264 and AAC `probably`,
+HEVC empty (Linux Chrome has no HEVC; that is normal and not a tell).
+
+**`python -m app.diagnose` is how any of this gets checked.** It launches a
+throwaway profile exactly the way a run does and prints what a page sees:
+brands, codecs, WebGL, WebGPU, focus, screen, and whether the Runtime-domain
+console leak fires. `GET /api/diagnostics/browser` is the same thing behind
+the "Check the browser" button in Settings. Run it before trusting any claim
+about the browser, and put its output in this file rather than an impression.
+One measured fact from it already: **the classic CDP tell - an Error `stack`
+getter firing on `console.debug` while Runtime is enabled - does not fire on
+Chrome 151**, with `Runtime.enable` sent explicitly, for any console method.
+That specific leak is gone from current Chrome; it does not follow that CDP
+is undetectable, and the un-driven window stays the way in.
+
 - **The live view works but may not be enough.** It can render a captcha and
   take clicks, and for a store that only wants a password that is fine. For an
   interactive Cloudflare challenge it is not, for the reasons in the two
   sections above.
+- **The address matters more than anything Trove does.** A VPS or cloud
+  address is challenged far more readily than a home one, and no browser
+  change fixes that. If the container lives on a datacenter address, route its
+  egress through a residential connection (a Tailscale exit node at home, a
+  WireGuard tunnel) or run it at home.
 
-**So the documented path for a container is to sign in on a desktop and carry
-the profile over.** A profile is an ordinary directory:
+**The fallback is still to sign in on a desktop and carry the profile over.**
+A profile is an ordinary directory:
 
 ```
 <DATA_DIR>/profiles/<id>-<slug>/
@@ -325,11 +376,14 @@ Three container-specific things that are easy to get wrong, all now handled:
 3. **The image installs real Chrome** (`playwright install --with-deps chrome`)
    for the codec reason above. Without it the container has only the bundle.
 
-**None of this has been run.** There is no Docker on the machine this was
-written on, so the Dockerfile, the entrypoint and the compose file are read and
-reasoned about but never built. The three faults above were found by reading.
-Assume there are more, and treat the first real build as a debugging session
-rather than a deployment.
+**The container has now been started, in CI.** There is still no Docker on the
+development machine, so `.github/workflows/container-smoke.yml` is how the
+image gets run: it builds it, starts it, checks Xvfb and x11vnc came up,
+runs `python -m app.diagnose` inside it as `pwuser`, and opens and closes a
+sign-in window through the API. It runs on every push to `main` and to
+`container/**` branches, and its log is the measurement; read it before
+changing anything in the Dockerfile or the entrypoint. What it cannot do is
+sign in to a store, so a claim run in the container is still unproven.
 
 ## Architecture
 
@@ -515,6 +569,18 @@ session trusting something nobody has run.
 - That Epic's redirects make `page.goto` raise `net::ERR_ABORTED` on a page that
   in fact loaded. `adapters/epic._goto` tolerates it; without that, a healthy
   signed-in account read as a 500.
+- **The container starts and the browser in it is whole**, by the smoke
+  workflow: the entrypoint brings up Xvfb and x11vnc, the API answers, real
+  Chrome 151 launches headed under Xvfb as `pwuser` with `--no-sandbox`,
+  WebGL reports Mesa llvmpipe, a WebGPU adapter exists, H.264 and AAC play,
+  `navigator.webdriver` is false, the brand list says Google Chrome, and an
+  un-driven sign-in window opens on the container's screen with no automation
+  flags on its command line and closes again through the API.
+- The screen bridge, against a fake VNC server: the greeting comes through,
+  bytes go both ways, and an unauthenticated socket is refused before any
+  connection to the VNC port is made.
+- That the Error-stack-getter CDP tell does not fire on Chrome 151 even with
+  `Runtime.enable` sent, for every console method.
 
 **Written and NOT verified:**
 
@@ -532,21 +598,19 @@ session trusting something nobody has run.
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in
   account to be meaningful.
-- **The Docker image, when actually run.** It now *builds* - GitHub Actions
-  publishes `ghcr.io/spillebulle/trove` on every push to main and on a `v*`
-  tag - and its contents were checked by reading the config blob back out of
-  the registry: `IN_CONTAINER=true` and `DISPLAY=:99` are set, the entrypoint
-  is tini, the healthcheck is present, and the `playwright install --with-deps
-  chrome` layer succeeded. So `gosu`, `usermod` and Chrome's install all exist
-  in the base image, which was the open question.
-
-  **No container has been started from it.** Building is not running: Xvfb
-  coming up, Chrome launching as `pwuser` with `--no-sandbox`, the PUID/PGID
-  remap against a bind-mounted volume, and whether a claim run works at all in
-  there are every one of them untested. Reading the Dockerfile found three
-  faults before it was ever built (the missing `xdpyinfo`, the sign-in button
-  offering itself in a container, Chrome needing `--no-sandbox`); expect the
-  first real `docker compose up` to find more.
+- **A claim run, or a sign-in, inside the container.** The smoke workflow
+  proves the container starts and the browser is whole; it cannot sign in to
+  a store, so whether Epic lets the container's un-driven window through, and
+  whether a scheduled run from a container address is challenged, are still
+  open and depend heavily on the address. The first real deployment answers
+  them; `python -m app.diagnose` and the account's screenshots are the
+  evidence to keep.
+- **That the screen view renders and takes input end to end in a real
+  browser.** The bridge is tested against a fake server and the noVNC client
+  type-checks and builds, but nobody has yet moved a mouse on the container's
+  screen through it. The first person to do so should note here whether the
+  picture keeps up and whether keyboard layout survives (noVNC sends keysyms,
+  so an umlaut is the test again).
 - **That the mouse fix makes a Turnstile checkbox pass.** It does not, on its
   own: the checkbox still looped after it, and the codec fingerprint was the
   real cause. The defect it fixed was real - every pointer move was arriving as
