@@ -55,8 +55,11 @@ signed-in sessions.
 > a virtual one - and "Sign in here" opens the account's Chrome on it with
 > nothing attached: no remote control, no automation flags. Trove then shows
 > you that screen in the page, you sign in, and you press "Done, close the
-> window". If the store still refuses you there (a datacenter address gets
-> challenged far more than a home one), sign in on a desktop and copy
+> window". If the store keeps looping you through a verification there, press
+> "Start a fresh profile" first - a profile that has been refused once tends to
+> keep being refused - and if that is not it, the address probably is (a
+> datacenter address gets challenged far more than a home one; `BROWSER_PROXY`
+> can give the browser a home one). Failing all that, sign in on a desktop and copy
 > `data/profiles/<id>-<slug>/` into the container's volume, then press "Check
 > again" on the account. Either way, everything after that - the schedule,
 > claiming, the ledger, notifications - runs in the container normally.
