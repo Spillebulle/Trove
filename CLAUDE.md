@@ -579,6 +579,17 @@ session trusting something nobody has run.
 - The screen bridge, against a fake VNC server: the greeting comes through,
   bytes go both ways, and an unauthenticated socket is refused before any
   connection to the VNC port is made.
+- **The screen view end to end**, with Trove run as if in a container
+  (`IN_CONTAINER=true VNC_ADDRESS=127.0.0.1:5999 DISPLAY=:0`), a minimal RFB
+  3.8 server on 5999 and real Chrome driving the built interface: "Sign in
+  here" opened the un-driven window, the dialog opened on its own because
+  `via` was `screen`, noVNC negotiated (version, security None, ServerInit,
+  SetEncodings), the raw frame drew on the canvas, a click arrived as
+  `PointerEvent mask=1` at the scaled coordinates, keys arrived as keysyms
+  (`0x61`, Enter `0xff0d`), "Done, close the window" returned 204, the window
+  process ended, and the session check ran after it. The fake server is
+  `fake_vnc.py` in the session scratchpad; it is eighty lines and worth
+  recreating if the screen view is touched.
 - That the Error-stack-getter CDP tell does not fire on Chrome 151 even with
   `Runtime.enable` sent, for every console method.
 
@@ -605,12 +616,15 @@ session trusting something nobody has run.
   open and depend heavily on the address. The first real deployment answers
   them; `python -m app.diagnose` and the account's screenshots are the
   evidence to keep.
-- **That the screen view renders and takes input end to end in a real
-  browser.** The bridge is tested against a fake server and the noVNC client
-  type-checks and builds, but nobody has yet moved a mouse on the container's
-  screen through it. The first person to do so should note here whether the
-  picture keeps up and whether keyboard layout survives (noVNC sends keysyms,
-  so an umlaut is the test again).
+- **That the screen view keeps up with a real x11vnc and a real Chrome on
+  it.** It has been proven end to end against a fake RFB server (below) - the
+  dialog opens, the frame draws, pointer and key events arrive - but not yet
+  against the container's own display with a page moving on it. The first
+  person to do so should note here whether the picture keeps up and whether
+  keyboard layout survives: noVNC sends X keysyms from `keydown`, so an umlaut
+  typed on a real keyboard is the test again. (Playwright's `keyboard.type` is
+  *not* that test: it delivers non-ASCII via `insertText`, which has no
+  keydown, so the fake server saw `a` and Enter and never the `Ä`.)
 - **That the mouse fix makes a Turnstile checkbox pass.** It does not, on its
   own: the checkbox still looped after it, and the codec fingerprint was the
   real cause. The defect it fixed was real - every pointer move was arriving as
