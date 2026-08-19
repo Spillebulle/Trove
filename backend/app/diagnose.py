@@ -178,6 +178,7 @@ async def probe() -> dict:
                 timezone_id="Europe/Oslo",
                 timeout=60_000,
                 proxy={"server": settings.browser_proxy} if settings.browser_proxy else None,
+                chromium_sandbox="--no-sandbox" not in LAUNCH_ARGS,
             )
             try:
                 page = context.pages[0] if context.pages else await context.new_page()

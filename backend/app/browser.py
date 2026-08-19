@@ -191,6 +191,15 @@ async def resolve_channel(playwright: Playwright, profile_path: Path) -> str | N
                     headless=True,
                     channel=candidate,
                     args=args,
+                    # **Playwright adds --no-sandbox itself unless told not
+                    # to** (`chromiumSandbox` defaults to false), which made
+                    # the first version of this probe a lie: "with its sandbox"
+                    # launched every time because it never had one, and the
+                    # un-driven window - which gets only the flags it is given -
+                    # then died on the real sandbox with nothing to say why.
+                    # Ask for the sandbox explicitly when probing without the
+                    # flag, so the answer is about Chrome and not Playwright.
+                    chromium_sandbox=NO_SANDBOX not in args,
                     timeout=60_000,
                 )
                 await context.close()
@@ -537,6 +546,9 @@ class BrowserManager:
                 timezone_id="Europe/Oslo",
                 accept_downloads=False,
                 proxy={"server": settings.browser_proxy} if settings.browser_proxy else None,
+                # Whatever the probe decided, for real: without this Playwright
+                # quietly adds --no-sandbox of its own.
+                chromium_sandbox=NO_SANDBOX not in LAUNCH_ARGS,
             )
             context.set_default_timeout(settings.browser_timeout_ms)
             entry.context = context
