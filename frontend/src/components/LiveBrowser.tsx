@@ -204,7 +204,13 @@ export function LiveBrowser({
       // A click has to put the keyboard somewhere. The hidden field is the only
       // thing on the page that can hold it, and without this every keystroke
       // after a click on the canvas goes to the page behind it.
-      if (kind === 'mousePressed') inputRef.current?.focus()
+      //
+      // `preventScroll` is not optional. Focusing an element scrolls it into
+      // view, and this one used to sit at `left: -9999px`, so a press could
+      // scroll its own container sideways - moving the canvas out from under
+      // the pointer between `pointerdown` and `pointerup`, and landing the
+      // release somewhere the user never clicked.
+      if (kind === 'mousePressed') inputRef.current?.focus({ preventScroll: true })
     }
 
   /* ── Keyboard ─────────────────────────────────────────────────────────── */
@@ -259,13 +265,28 @@ export function LiveBrowser({
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-tool border border-line bg-window">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-tool border border-line bg-window">
         <canvas
           ref={canvasRef}
-          // `touch-none` so a drag on a touch screen scrolls the remote page
-          // rather than the app around it.
+          /*
+           * `max-h-full max-w-full`, never `h-full w-full object-contain`.
+           *
+           * A canvas is a replaced element, so `object-contain` letterboxes the
+           * 1280x800 bitmap *inside* the element box rather than resizing the
+           * box. `toRemote` maps a click through `getBoundingClientRect()`,
+           * which is the element - bars included - so every coordinate was
+           * offset by the bar and scaled by the wrong ratio. It read as "clicks
+           * work sometimes", because how wrong it is depends on the container's
+           * aspect ratio and on where in the frame you press.
+           *
+           * With `max-*` and no explicit size, the browser scales the canvas by
+           * its intrinsic 1280x800, so the element box *is* the drawn area and
+           * the mapping is exact. The flex parent centres what is left.
+           */
           className={cn(
-            'h-full w-full touch-none object-contain',
+            // `touch-none` so a drag on a touch screen scrolls the remote page
+            // rather than the app around it.
+            'max-h-full max-w-full touch-none',
             phase !== 'live' && 'opacity-40',
           )}
           onPointerDown={onPointer('mousePressed')}
@@ -295,7 +316,11 @@ export function LiveBrowser({
          */}
         <textarea
           ref={inputRef}
-          className="absolute left-[-9999px] top-0 h-px w-px opacity-0"
+          // Inside the viewport rather than parked off-screen, so focusing it
+          // has nowhere to scroll to in the first place; `pointer-events-none`
+          // keeps a 1px invisible field from ever swallowing a click, while
+          // still allowing `focus()` to reach it.
+          className="pointer-events-none absolute left-0 top-0 h-px w-px opacity-0"
           aria-label="Keyboard input for the live browser."
           onKeyDown={onKeyDown}
           onBeforeInput={onBeforeInput}

@@ -120,7 +120,28 @@ Two additions neither sibling has, both now built:
   3. **The canvas needs somewhere to put the keyboard.** An off-screen textarea
      takes focus on click; `display: none` cannot hold focus and receives no
      keys.
-  4. **A mouse move must not carry a button.** `MouseEvent.button` is `-1` on a
+  4. **The canvas element's box must equal the drawn bitmap.** A canvas is a
+     replaced element, so `object-fit: contain` letterboxes the 1280x800 frame
+     *inside* the element rather than resizing the element. The click mapping
+     goes through `getBoundingClientRect()`, which is the element - bars
+     included - so coordinates were offset by the bar and scaled by the wrong
+     ratio.
+
+     Measured on a 964x503 element drawing an 805x503 image: **0 px error at
+     the horizontal centre, +/-84 px at the edges.** That is why it presented
+     as "clicking works sometimes" rather than as an obvious fault, and why a
+     challenge checkbox left of centre was unhittable while the middle of the
+     page was fine. Use `max-h-full max-w-full` and let the intrinsic size do
+     the scaling; the element box is then the drawn area and the mapping is
+     exact. `scratchpad`-style measurement beats eyeballing it: the error is
+     invisible until it is printed.
+  5. **Focus the keyboard sink with `preventScroll`.** Focusing an element
+     scrolls it into view, and the off-screen textarea sat at `left: -9999px`,
+     so a press could scroll its own container and move the canvas out from
+     under the pointer between `pointerdown` and `pointerup`. It now lives at
+     the container's origin at 1px with `pointer-events-none`, and is focused
+     with `{ preventScroll: true }`.
+  6. **A mouse move must not carry a button.** `MouseEvent.button` is `-1` on a
      move where nothing changed, and the first version looked that up in a table
      of button names with `left` as the default. Chromium derives `buttons` from
      `button` when the field is absent, so **every pointer movement arrived at
