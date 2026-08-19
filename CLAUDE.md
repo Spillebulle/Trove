@@ -367,12 +367,20 @@ the name is never re-derived from a renamed label.
 
 Three container-specific things that are easy to get wrong, all now handled:
 
-1. **`--no-sandbox` is added only in a container.** Chrome's setuid sandbox
-   needs user namespaces the default seccomp profile withholds, so without it
+1. **`--no-sandbox` is added only in a container, and only if needed.** It
+   used to be unconditional there, on the reasoning that Chrome's sandbox needs
+   user namespaces the default seccomp profile withholds, so without the flag
    Chrome does not start - and `resolve_channel` reads that as "Chrome is not
-   usable" and silently falls back to the bundled Chromium, which is exactly the
-   browser that cannot pass a captcha. A silent downgrade to a broken state is
-   the worst shape a failure can take.
+   usable" and silently falls back to the bundled Chromium, exactly the browser
+   that cannot pass a captcha. **Then the smoke workflow measured it: on a
+   current Docker, Chrome starts sandboxed as `pwuser` with no flag at all.**
+   So `CONTAINER_SANDBOX` defaults to `auto`: `resolve_channel` probes each
+   channel with the sandbox first and `--no-sandbox` second, commits the flag
+   to `LAUNCH_ARGS` and `CONTAINER_ARGS` only if the first would not start,
+   and logs which. `open_local` resolves before opening the un-driven window
+   so the first sign-in of a fresh install does not open a Chrome that dies on
+   the sandbox. The `--no-sandbox` infobar across the top of the screen view
+   is the visible difference; the page cannot see the flag either way.
 2. **The entrypoint must not need a package the image lacks.** It waited on
    `xdpyinfo`, which lives in `x11-utils` and is *not* installed by `xvfb`; a
    missing command returns non-zero forever, so the readiness loop timed out and
@@ -593,7 +601,9 @@ session trusting something nobody has run.
   sample, not a promise; but it is the first time this app has had a picture
   of a store letting the container in rather than an argument about whether
   it would. The only blemish is Chrome's own "--no-sandbox" infobar across the
-  top, which the page cannot see and a person can close.
+  top, which the page cannot see and a person can close - and which goes away
+  wherever the sandbox probe finds Chrome can keep its sandbox, as it did on
+  the runner.
 
   **And the driven browser too.** When that window closed, Trove opened the
   same profile with Playwright - CDP attached, the exact launch a scheduled

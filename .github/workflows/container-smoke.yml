@@ -95,14 +95,15 @@ jobs:
           assert not r.get("error"), r.get("error")
           '
 
-      - name: Can Chrome run with its own sandbox here? (informational)
-        # Non-fatal. If this ever says "channel: chrome" with no error, the
-        # default can flip and the --no-sandbox infobar goes away.
+      - name: Which way did the sandbox go? (and does "on" still launch)
+        # The default probe above already decided; this prints it, then forces
+        # the sandbox on to see whether that alone launches. Non-fatal.
         run: |
-          docker exec -u pwuser -w /app -e CONTAINER_NO_SANDBOX=false trove python -m app.diagnose > sandbox-probe.json || true
+          python3 -c 'import json; r=json.load(open("diagnose.json")); print("auto ->", r.get("sandbox"), "| args:", [a for a in r.get("launch_args", []) if "sandbox" in a])'
+          docker exec -u pwuser -w /app -e CONTAINER_SANDBOX=on trove python -m app.diagnose > sandbox-probe.json || true
           python3 -c '
           import json; r = json.load(open("sandbox-probe.json"))
-          print("with sandbox -> channel:", r.get("channel"), "| error:", r.get("error"), "| args:", [a for a in r.get("launch_args", []) if "sandbox" in a])
+          print("forced on -> channel:", r.get("channel"), "| error:", r.get("error"))
           ' || cat sandbox-probe.json
 
       - name: Sign-in window on the container screen, opened and closed through the API

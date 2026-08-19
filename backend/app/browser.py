@@ -108,22 +108,40 @@ CONTAINER_ARGS = [
     "--enable-unsafe-webgpu",
 ]
 
-if settings.in_container and settings.container_no_sandbox:
-    # Chrome's setuid sandbox needs user namespaces the default container
-    # seccomp profile does not grant, so in a container it usually refuses to
-    # start at all. That failure is worse than it sounds here: `resolve_channel`
-    # would read it as "Chrome is not usable", fall back to the bundled
-    # Chromium, and quietly leave the install unable to answer a captcha.
-    #
-    # The isolation being dropped is the browser's own, inside a container that
-    # is already the isolation boundary, and the pages being opened are two
-    # storefronts. Not added on a desktop, where the sandbox works and is worth
-    # having. `CONTAINER_NO_SANDBOX=false` turns it off to find out whether
-    # this container can do without; the smoke workflow asks on every run.
-    CONTAINER_ARGS.insert(0, "--no-sandbox")
+# `--no-sandbox`, and when. Chrome's sandbox needs either its setuid helper
+# or unprivileged user namespaces, and a container can withhold both: on an
+# older kernel or a stricter seccomp profile Chrome then refuses to start at
+# all - a failure that is worse than it sounds, because `resolve_channel`
+# would read it as "Chrome is not usable", fall back to the bundled Chromium,
+# and quietly leave the install unable to answer a captcha. On a current
+# Docker, measured by the smoke workflow, Chrome starts sandboxed as `pwuser`
+# without the flag. So the default is to find out: `resolve_channel` tries
+# the sandbox first and adds the flag only if Chrome would not come up, and
+# says which in the log. The isolation dropped in that case is the browser's
+# own inside a container that is already the boundary, and the pages are two
+# storefronts. `CONTAINER_SANDBOX=on|off` overrides the probe either way.
+NO_SANDBOX = "--no-sandbox"
+if settings.in_container and settings.container_sandbox.strip().lower() == "off":
+    CONTAINER_ARGS.insert(0, NO_SANDBOX)
 
 if settings.in_container:
     LAUNCH_ARGS.extend(CONTAINER_ARGS)
+
+
+def _sandbox_arg_sets() -> list[list[str]]:
+    """The launch-arg variants to probe, in the order to prefer them."""
+    mode = settings.container_sandbox.strip().lower()
+    if settings.in_container and mode == "auto":
+        return [list(LAUNCH_ARGS), list(LAUNCH_ARGS) + [NO_SANDBOX]]
+    return [list(LAUNCH_ARGS)]
+
+
+def _commit_no_sandbox() -> None:
+    """The probe found Chrome needs the flag: give it to every launch from now."""
+    if NO_SANDBOX not in LAUNCH_ARGS:
+        LAUNCH_ARGS.append(NO_SANDBOX)
+    if NO_SANDBOX not in CONTAINER_ARGS:
+        CONTAINER_ARGS.insert(0, NO_SANDBOX)
 
 
 # Which browser channel actually worked, once we have found out. `False` means
@@ -161,25 +179,45 @@ async def resolve_channel(playwright: Playwright, profile_path: Path) -> str | N
 
     probe_dir = profile_path.parent / ".channel-probe"
     for candidate in _channel_candidates():
-        try:
-            probe_dir.mkdir(parents=True, exist_ok=True)
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=str(probe_dir),
-                headless=True,
-                channel=candidate,
-                args=LAUNCH_ARGS,
-                timeout=60_000,
-            )
-            await context.close()
-        except Exception as exc:
-            logger.info(
-                "Browser channel %r is not usable (%s). Trying the next one.",
-                candidate or "bundled chromium",
-                str(exc).splitlines()[0][:120],
-            )
+        launched = False
+        # In a container on "auto", each channel is tried with Chrome's own
+        # sandbox first and with --no-sandbox second; the first that starts
+        # decides for every later launch, the un-driven window included.
+        for args in _sandbox_arg_sets():
+            try:
+                probe_dir.mkdir(parents=True, exist_ok=True)
+                context = await playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(probe_dir),
+                    headless=True,
+                    channel=candidate,
+                    args=args,
+                    timeout=60_000,
+                )
+                await context.close()
+            except Exception as exc:
+                logger.info(
+                    "Browser channel %r %s is not usable (%s).",
+                    candidate or "bundled chromium",
+                    "without its sandbox" if NO_SANDBOX in args else "with its sandbox",
+                    str(exc).splitlines()[0][:120],
+                )
+                continue
+            finally:
+                purge_profile(probe_dir)
+            launched = True
+            if NO_SANDBOX in args and NO_SANDBOX not in LAUNCH_ARGS:
+                _commit_no_sandbox()
+                logger.warning(
+                    "Chrome would not start with its own sandbox in this "
+                    "container, so it runs with --no-sandbox. That is the usual "
+                    "state on an older kernel or a strict seccomp profile; the "
+                    "container is the isolation boundary either way."
+                )
+            elif settings.in_container:
+                logger.info("Chrome starts with its own sandbox in this container.")
+            break
+        if not launched:
             continue
-        finally:
-            purge_profile(probe_dir)
 
         _channel = candidate
         if candidate is None and (settings.browser_channel or "auto").lower() == "auto":
@@ -534,6 +572,14 @@ class BrowserManager:
         await entry.lock.acquire()
         entry.lease = Lease(holder="a sign-in window")
         try:
+            if settings.in_container:
+                # The un-driven window shares CONTAINER_ARGS with the driven
+                # browser, and whether those carry --no-sandbox is decided by
+                # launching once. Decide before this window opens, so the
+                # first sign-in of a fresh install does not open a Chrome that
+                # dies on the sandbox with nothing to say why.
+                playwright = await self._ensure_playwright()
+                await resolve_channel(playwright, profile_path)
             process = launch_detached(profile_path, url)
         except Exception:
             entry.lease = None

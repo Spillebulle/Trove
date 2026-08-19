@@ -162,6 +162,11 @@ async def probe() -> dict:
         async with async_playwright() as playwright:
             channel = await resolve_channel(playwright, probe_dir)
             report["channel"] = channel or "bundled chromium"
+            # After the resolve, because that is when --no-sandbox is decided.
+            report["launch_args"] = list(LAUNCH_ARGS)
+            report["sandbox"] = (
+                "off (--no-sandbox)" if "--no-sandbox" in LAUNCH_ARGS else "on"
+            )
             probe_dir.mkdir(parents=True, exist_ok=True)
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=str(probe_dir),
