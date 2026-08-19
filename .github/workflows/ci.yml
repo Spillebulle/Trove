@@ -1,19 +1,33 @@
-name: Checks
-
+# Verification only. This workflow never pushes an image - publishing lives in
+# docker.yml and is driven exclusively by `v*` tags. Keep it that way: listening
+# on both a branch and its tag double-runs every build.
+#
 # Small on purpose. There is no test suite yet, so this is the two things that
 # can be checked without one: the frontend type-checks, and the backend can be
-# imported. Both have caught real breakage in this repository already - a toast
-# tone that was not in the union, and a router that would not load.
+# imported. Both have caught real breakage already - a toast tone that was not
+# in the union, and a router that would not load.
+name: CI
 
 on:
   push:
     branches: [main]
+    # Tags are docker.yml's job. Without this, tagging a commit on main would
+    # run both workflows over the same tree.
+    tags-ignore: ['**']
   pull_request:
-    branches: [main]
   workflow_dispatch:
+
+# A new push to the same branch makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   frontend:
+    name: Frontend - tsc and build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +45,7 @@ jobs:
         working-directory: frontend
 
   backend:
+    name: Backend - import check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

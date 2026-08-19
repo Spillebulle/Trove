@@ -1,104 +1,201 @@
-name: Build and publish the image
-
-# Publishes to GHCR: ghcr.io/<owner>/trove
-#
-#   push to main       -> :main and :sha-<commit>, so the Linux box can always
-#                         pull the current tip without waiting for a release
-#   push of a v* tag   -> :0.1.0, :0.1, :latest
-#   pull request       -> builds only, never pushes
-#
-# `workflow_dispatch` is here because the first build of an image that has
-# never run is a debugging session, and re-running it from the Actions tab
-# without inventing a commit is worth the four lines.
+# Publishes the container image to GHCR and Docker Hub. Driven exclusively by
+# `v*` tags - pushing main deliberately does not build (ci.yml verifies branches
+# instead). Use the workflow_dispatch button to rebuild an existing version
+# without cutting a new one.
+name: Build and publish container image
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create the GitHub Release
+  packages: write   # push to GHCR
 
 jobs:
-  build:
+  publish:
+    name: Build and push
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Required to push to GHCR with the automatic GITHUB_TOKEN. Without it the
-      # build succeeds and the push 403s, which is a slow way to learn this.
-      packages: write
-
+    env:
+      # Lifted to env so steps can test it in an `if:` - secrets are not
+      # available in job-level conditionals. Empty when Docker Hub is not
+      # configured, which makes every Docker Hub step below skip.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the annotated tag's message is available to become
+          # the Release body.
+          fetch-depth: 0
 
-      # Buildx for the cache backend below. Not for cross-building: see the
-      # single-platform note on the build step.
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          code="$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' backend/app/__init__.py)"
+          echo "tag=$tag  backend/app/__init__.py=$code"
+          if [ "$tag" != "$code" ]; then
+            echo "::error::Version mismatch: tag is v$tag but backend/app/__init__.py says $code. Bump it to match and re-tag."
+            exit 1
+          fi
 
-      - name: Sign in to GHCR
-        # A pull request from a fork has no write token, so signing in would
-        # fail on a step that only exists to enable a push that is not going to
-        # happen.
-        if: github.event_name != 'pull_request'
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Work out the tags
+      # Skipped entirely when DOCKERHUB_USERNAME is unset, so a release still
+      # succeeds and publishes to GHCR before Docker Hub secrets are added.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Decide which registries to publish to
+        id: registries
+        run: |
+          set -euo pipefail
+          # GHCR paths must be lowercase, and metadata-action lowercases its own
+          # `images:` input - but building the list here means doing it ourselves.
+          images="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+            images="${images}"$'\n'"docker.io/${DOCKERHUB_USERNAME,,}/trove"
+          else
+            echo "::warning::DOCKERHUB_USERNAME is not set - publishing to GHCR only. Add DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets to also publish to Docker Hub."
+          fi
+          echo "Publishing to:"; echo "$images"
+
+          {
+            echo 'images<<EOF'
+            echo "$images"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Derive tags and labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.registries.outputs.images }}
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
+            type=sha,format=short
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=Trove
             org.opencontainers.image.description=Claims the games that are temporarily free, on your own store accounts
+            org.opencontainers.image.licenses=GPL-3.0-or-later
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          # ── linux/amd64 only, deliberately ──────────────────────────────
+          # ── amd64 only, unlike the sibling projects ─────────────────────
           #
-          # The image installs **real Google Chrome**, and Google does not ship
-          # Chrome for Linux on arm64 - there is no arm64 .deb, only Chromium.
-          # So an arm64 build would either fail at `playwright install chrome`
-          # or, if that were made non-fatal, produce an image silently running
-          # the bundled Chromium, which is exactly the browser that cannot get
-          # past a captcha (see CLAUDE.md, "The browser has to be real Chrome").
+          # Tally and HomeLab Manager both publish linux/amd64,linux/arm64.
+          # Trove cannot, and this is the one place it departs from the house
+          # workflow: the image installs **real Google Chrome**, and Google
+          # ships no Chrome for Linux on arm64 - there is only Chromium there.
           #
-          # An image that quietly cannot do the thing the app exists for is
-          # worse than no image, so this fails loudly on arm64 instead. If arm64
-          # is ever wanted, it needs its own decision about that limitation
-          # rather than a platform added to this line.
+          # An arm64 build would therefore either fail at `playwright install
+          # chrome`, or, if that were made non-fatal, publish an image silently
+          # running the bundled Chromium, which is exactly the browser that
+          # cannot get past a store's captcha (CLAUDE.md, "The browser has to be
+          # real Chrome"). An image that quietly cannot do the thing the app
+          # exists for is worse than no image, so there is no arm64 build and no
+          # QEMU step to emulate one.
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # The Playwright base image is about 1.8 GB and the npm and pip layers
-          # are slow. GitHub's cache makes a no-op rebuild minutes rather than
-          # tens of minutes.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
 
-      - name: Say where it went
-        if: github.event_name != 'pull_request'
+      # Docker Hub shows an empty page until something pushes a description, so
+      # push one. It is `docs/dockerhub.md` rather than README.md, because the
+      # two renderers are not the same: Docker Hub renders Markdown and not raw
+      # HTML, and the README's header is an HTML block. Deliberately non-fatal:
+      # a description that fails to update must not fail a release whose images
+      # went out fine.
+      - name: Update the Docker Hub description
+        id: hub_description
+        if: env.DOCKERHUB_USERNAME != '' && startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/trove
+          readme-filepath: ./docs/dockerhub.md
+          short-description: "Claims the games that are temporarily free, on your own store accounts"
+          enable-url-completion: true
+
+      # continue-on-error reports the step's *conclusion* as success even when it
+      # failed, so a broken description would be invisible in the run summary.
+      # `outcome` holds the truth; surface it as a warning that is still
+      # non-fatal.
+      - name: Warn if the Docker Hub description did not update
+        if: steps.hub_description.outcome == 'failure'
         run: |
-          echo "### Image published" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "Packages are private by default. Make it public under" >> "$GITHUB_STEP_SUMMARY"
-          echo "Packages > trove > Package settings, or \`docker login ghcr.io\` first." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Docker Hub description was not updated (the API refused the request). The images published fine. A 'Forbidden' here usually means DOCKERHUB_TOKEN lacks the scope to edit repository metadata - a Read/Write/Delete personal access token is required, or set the description by hand in the Docker Hub UI."
+
+      - name: Create the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+
+          # Re-running via workflow_dispatch on an existing tag must not fail.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists - leaving it alone."
+            exit 0
+          fi
+
+          # Read the annotation from the API, not from git.
+          #
+          # actions/checkout leaves the tag lightweight in the runner's clone, so
+          # `git tag -l --format='%(contents)'` silently falls back to the COMMIT
+          # message. The API always returns the real tag object.
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha')"
+          tag_type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.type')"
+
+          if [ "$tag_type" = "tag" ]; then
+            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha" --jq '.message')"
+          else
+            echo "::warning::$tag is a lightweight tag - it carries no annotation, so the release gets a placeholder body. Use 'git tag -a' for release notes."
+            message=""
+          fi
+
+          # First line is the title, the rest is the body.
+          subject="$(printf '%s\n' "$message" | head -n 1)"
+          body="$(printf '%s\n' "$message" | tail -n +2)"
+
+          {
+            printf '%s\n\n---\n\n' "${body:-Released from $tag.}"
+            printf 'Container images (linux/amd64):\n\n'
+            printf -- '- `ghcr.io/%s:%s`\n' "${GITHUB_REPOSITORY,,}" "${tag#v}"
+            if [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+              printf -- '- `docker.io/%s/trove:%s`\n' "${DOCKERHUB_USERNAME,,}" "${tag#v}"
+            fi
+          } > /tmp/notes.md
+
+          # --notes-file, not --notes: the body contains backticks and $ that a
+          # shell-expanded argument would mangle.
+          gh release create "$tag" \
+            --title "${subject:-$tag}" \
+            --notes-file /tmp/notes.md

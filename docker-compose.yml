@@ -1,9 +1,9 @@
 services:
   trove:
-    # The published image. `:latest` moves with each tagged release; `:main`
-    # is the tip of the branch, which is what to use while the first Linux
-    # deployment is still being debugged. To build it yourself instead, drop
-    # this line and put `build: .` in its place.
+    # Published to both registries by the release workflow, which is driven by
+    # `v*` tags only - there is no image built from the tip of main. Docker Hub
+    # is `spillebulle/trove:latest` if you prefer it. To build it yourself
+    # instead, drop this line and put `build: .` in its place.
     image: ghcr.io/spillebulle/trove:latest
     container_name: trove
     restart: unless-stopped

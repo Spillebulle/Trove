@@ -42,9 +42,10 @@ services:
 ```
 
 `docker compose up -d`, then open `http://localhost:8080` and sign in as
-`admin`. The image is `linux/amd64` only, because it installs real Google
-Chrome and Google ships no Chrome for Linux on arm64. `:latest` moves with each
-release; use `:main` for the tip of the branch. The image carries a real Chrome, so it is around 2 GB and wants
+`admin`. The same image is on Docker Hub as `spillebulle/trove` if you prefer
+it. Images are `linux/amd64` only, because the image installs real Google
+Chrome and Google ships no Chrome for Linux on arm64, and they are published
+from `v*` tags only - there is no build from the tip of main. The image carries a real Chrome, so it is around 2 GB and wants
 `shm_size: 1gb`; below about 512 MB Chrome crashes part-way through a store
 page. Everything else, including the two encryption keys, is generated into
 `./data` on the first start. Back that directory up and you have backed up your

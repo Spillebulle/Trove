@@ -17,13 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import scheduler
+from . import __version__ as VERSION
 from .auth import bootstrap_admin
 from .browser import manager
 from .config import get_settings
 from .db import init_db
 from .routers import accounts, ledger, live, settings as settings_router
-
-VERSION = "0.1.0"
 
 settings = get_settings()
 
