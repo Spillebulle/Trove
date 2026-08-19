@@ -2,6 +2,13 @@
 # `v*` tags - pushing main deliberately does not build (ci.yml verifies branches
 # instead). Use the workflow_dispatch button to rebuild an existing version
 # without cutting a new one.
+#
+# **Dispatching on an old tag runs that tag's copy of this file.** GitHub reads
+# the workflow definition from the ref it is dispatched against, not from main,
+# so re-running v0.1.0 to pick up a change made after it was tagged silently
+# does the old thing instead. That is how v0.1.0 was "republished" to both
+# registries and reached only GHCR: the tag predated the Docker Hub steps.
+# A workflow change needs a new tag to take effect.
 name: Build and publish container image
 
 on:
