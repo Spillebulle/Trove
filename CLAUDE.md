@@ -647,6 +647,15 @@ session trusting something nobody has run.
   driven run reach the store from a datacenter address without a challenge.
   Whether that holds at the *login* and the *checkout* is what a signed-in
   account will tell; those pages are where Epic challenges hardest.
+- **Typing into the un-driven window, in the container.** The smoke workflow
+  stores an email, a password and a TOTP secret on the account, opens the
+  sign-in window, and posts `email, tab, password, code, enter` to
+  `/api/accounts/{id}/type`; every one returned 204, and the VNC capture
+  taken right after shows `smoke@example.com` sitting in Epic's search box -
+  the field that happened to have focus - with the page full screen and no
+  bars, the infobar gone by way of the `CommandLineFlagSecurityWarningsEnabled`
+  policy. So xdotool reaches Chrome through the X server and the keystrokes
+  land in the page like anybody's.
 - **The screen view end to end**, with Trove run as if in a container
   (`IN_CONTAINER=true VNC_ADDRESS=127.0.0.1:5999 DISPLAY=:0`), a minimal RFB
   3.8 server on 5999 and real Chrome driving the built interface: "Sign in
