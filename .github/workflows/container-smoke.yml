@@ -143,9 +143,24 @@ jobs:
             echo "::error::the window is still open after close-sign-in"; exit 1
           fi
           echo "closed"
-          sleep 20
-          echo "--- the account after the window closed (the session check should have run)"
-          curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id" | python3 -c 'import json,sys; a=json.load(sys.stdin); print({k: a.get(k) for k in ("status","status_reason","busy_with","last_checked_at")})'
+          # The window closing makes Trove open the same profile with
+          # Playwright and ask the store whether it is signed in. That browser
+          # is driven - CDP attached - and it is on the same screen, so a
+          # second capture a few seconds in shows what the store puts in front
+          # of a *driven* Chrome from this address, which is the question a
+          # scheduled run would ask.
+          sleep 12
+          docker run --rm --network container:trove -v "$PWD/shots:/shots" python:3.12-slim             sh -c 'pip install -q vncdotool >/dev/null 2>&1 && vncdo -s 127.0.0.1::5900 capture /shots/screen-session-check.png'             || echo "::warning::could not capture the second screen"
+          echo "--- the account after the window closed (waiting for the session check)"
+          for i in $(seq 1 30); do
+            a=$(curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id")
+            if ! echo "$a" | grep -q '"busy_with":"a sign-in check"'; then break; fi
+            sleep 3
+          done
+          echo "$a" | python3 -c 'import json,sys; a=json.load(sys.stdin); print({k: a.get(k) for k in ("status","status_reason","busy_with","last_checked_at","status_screenshot")})'
+          echo "--- screenshots the run left behind"
+          ls -l data/screenshots 2>/dev/null || echo "(none)"
+          mkdir -p shots && cp data/screenshots/*.png shots/ 2>/dev/null || true
 
       - name: Container log
         if: always()
