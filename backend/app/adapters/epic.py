@@ -215,8 +215,8 @@ class EpicAdapter(BaseAdapter):
         Requirement(
             name="A signed-in session",
             description=(
-                "Sign in by hand once, in the live view. Epic challenges a "
-                "fresh login, so this is the step Trove cannot do for you."
+                "Sign in by hand once, with \"Sign in here\". Epic challenges "
+                "a fresh login, so this is the step Trove cannot do for you."
             ),
         ),
         Requirement(
@@ -270,7 +270,7 @@ class EpicAdapter(BaseAdapter):
         if await _first_visible(page, SIGNED_IN, timeout_ms=4000):
             return True, "Signed in."
         if await _first_visible(page, SIGNED_OUT):
-            return False, "This account is signed out. Sign in again in the live view."
+            return False, "This account is signed out. Sign in again with \"Sign in here\"."
         # Neither shape. Say so rather than guessing: an unrecognised page is
         # the thing that most often means Epic changed something, and reporting
         # it as "signed out" would send the user to sign in to no effect.

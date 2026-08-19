@@ -594,6 +594,19 @@ session trusting something nobody has run.
   of a store letting the container in rather than an argument about whether
   it would. The only blemish is Chrome's own "--no-sandbox" infobar across the
   top, which the page cannot see and a person can close.
+
+  **And the driven browser too.** When that window closed, Trove opened the
+  same profile with Playwright - CDP attached, the exact launch a scheduled
+  run uses - to ask Epic whether it was signed in. The screenshot that check
+  left behind (`0001-epic-…-signin-check.png` in the smoke artifact) is the
+  Epic store front page, fully rendered, "Sign in" button and all: **no
+  interstitial for the driven browser either**, from the same runner address.
+  The check then correctly reported "signed out" and filed the account for
+  attention, which is the design working. So the measured state of the
+  container is: real Chrome, software GPU, both the un-driven window and the
+  driven run reach the store from a datacenter address without a challenge.
+  Whether that holds at the *login* and the *checkout* is what a signed-in
+  account will tell; those pages are where Epic challenges hardest.
 - **The screen view end to end**, with Trove run as if in a container
   (`IN_CONTAINER=true VNC_ADDRESS=127.0.0.1:5999 DISPLAY=:0`), a minimal RFB
   3.8 server on 5999 and real Chrome driving the built interface: "Sign in
