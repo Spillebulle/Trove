@@ -61,6 +61,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker Hub answers a credential with stray whitespace in it with
+      # `malformed HTTP Authorization header`, which names neither the secret
+      # nor the problem. The header is base64 of "user:token", so a single
+      # trailing newline - which `echo x | gh secret set` puts there, and
+      # pasting into the web UI can too - is enough to break it.
+      #
+      # This reports the shape and never the value: a length, and how many
+      # whitespace characters are in it. GitHub masks the secrets themselves in
+      # logs, and nothing here would reveal one anyway.
+      - name: Check the Docker Hub secrets look sane
+        if: env.DOCKERHUB_USERNAME != ''
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          fail=0
+          check() {
+            name="$1"; value="$2"
+            len=${#value}
+            stripped="$(printf '%s' "$value" | tr -d '[:space:]')"
+            printable="$(printf '%s' "$value" | tr -cd '[:print:]')"
+            if [ "$len" -eq 0 ]; then
+              echo "::error::$name is empty."; fail=1; return
+            fi
+            if [ "${#stripped}" -ne "$len" ]; then
+              echo "::error::$name is $len characters and $(( len - ${#stripped} )) of them are whitespace. A trailing newline is the usual cause: 'echo token | gh secret set' keeps it. Re-set it with: printf '%s' 'the-value' | gh secret set $name --repo $GITHUB_REPOSITORY"
+              fail=1; return
+            fi
+            if [ "${#printable}" -ne "$len" ]; then
+              echo "::error::$name contains non-printable characters. Re-set it by hand."; fail=1; return
+            fi
+            echo "$name looks well formed ($len characters, no whitespace)."
+          }
+          check DOCKERHUB_USERNAME "$DOCKERHUB_USERNAME"
+          check DOCKERHUB_TOKEN "$HUB_TOKEN"
+          case "$HUB_TOKEN" in
+            dckr_pat_*) echo "The token is a Docker Hub personal access token." ;;
+            *) echo "::warning::DOCKERHUB_TOKEN does not start with 'dckr_pat_'. An account password works but a personal access token is the right thing, and only a Read/Write/Delete one can update the description." ;;
+          esac
+          exit "$fail"
+
       # Skipped entirely when DOCKERHUB_USERNAME is unset, so a release still
       # succeeds and publishes to GHCR before Docker Hub secrets are added.
       - name: Log in to Docker Hub
