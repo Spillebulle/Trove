@@ -26,7 +26,12 @@ if [ "${TROVE_HEADLESS}" != "true" ]; then
     # 1280x800 matches the viewport in browser.py. A display smaller than the
     # viewport makes Chromium letterbox the page, which shows up in the live
     # view as a window with black bars nobody can explain.
-    Xvfb "${DISPLAY}" -screen 0 1280x800x24 -nolisten tcp >/dev/null 2>&1 &
+    #
+    # `+extension GLX` so Mesa can offer OpenGL on this display, which is what
+    # gives Chrome a WebGL at all; `-noreset` so the server does not reset its
+    # state (and drop the VNC client) every time the last window closes, which
+    # it otherwise does between one browser and the next.
+    Xvfb "${DISPLAY}" -screen 0 1280x800x24 +extension GLX +render -noreset -nolisten tcp >/dev/null 2>&1 &
     xvfb_pid=$!
     # Wait for it rather than sleeping a fixed second: on a slow host the
     # browser used to start before the display existed and die with
@@ -45,6 +50,26 @@ if [ "${TROVE_HEADLESS}" != "true" ]; then
       fi
       sleep 0.1
     done
+  fi
+
+  # ── The screen ─────────────────────────────────────────────────────────────
+  #
+  # A VNC server on that display, so that a person can see it. This is what
+  # makes "sign in here" work in a container: Chrome opens on the framebuffer
+  # with nothing attached to it - no DevTools protocol, no automation flags -
+  # and the person works it through Trove's screen view, which bridges its own
+  # authenticated WebSocket to this port. It listens on localhost only and has
+  # no password of its own, because nothing but Trove can reach it. Set
+  # VNC_ADDRESS empty to skip it.
+  if [ -n "${VNC_ADDRESS}" ] && command -v x11vnc >/dev/null 2>&1; then
+    vnc_port="${VNC_ADDRESS##*:}"
+    # -noxdamage: Chrome draws through its GPU process and the damage
+    # extension misses those updates, which shows as a picture that stops
+    # moving. -forever -shared: more than one viewer, and the server outlives
+    # each of them. -nopw is deliberate, see above.
+    x11vnc -display "${DISPLAY}" -localhost -rfbport "${vnc_port}" -nopw \
+      -forever -shared -noxdamage -repeat -quiet -bg >/dev/null 2>&1 \
+      || echo "x11vnc did not start; the screen view will not work." >&2
   fi
 fi
 

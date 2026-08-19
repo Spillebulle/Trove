@@ -85,7 +85,10 @@ LAUNCH_ARGS = [
     "--disable-features=PasswordManagerOnboarding,AutofillServerCommunication",
 ]
 
-if settings.in_container:
+# What a browser in the container needs that one on a desktop does not. Shared
+# between the Playwright launch and the un-driven sign-in window, because both
+# draw on the same Xvfb display and both fall over in the same ways without it.
+CONTAINER_ARGS = [
     # Chrome's setuid sandbox needs user namespaces the default container
     # seccomp profile does not grant, so in a container it usually refuses to
     # start at all. That failure is worse than it sounds here: `resolve_channel`
@@ -96,7 +99,28 @@ if settings.in_container:
     # is already the isolation boundary, and the pages being opened are two
     # storefronts. Not added on a desktop, where the sandbox works and is worth
     # having.
-    LAUNCH_ARGS.append("--no-sandbox")
+    "--no-sandbox",
+    # **Give the browser a GPU, even a software one.** Under Xvfb there is no
+    # GPU, and Chrome's answer to that is to switch WebGL off and report no
+    # WebGPU adapter at all - "No available adapters." was the exact line a
+    # Cloudflare challenge logged in the live view. A browser whose user-agent
+    # says desktop Chrome and whose WebGL is absent is a contradiction of the
+    # same kind as the codec one: real Chrome on a real desktop always has it.
+    #
+    # `--ignore-gpu-blocklist` lets Chrome use Mesa's llvmpipe through ANGLE
+    # (the Dockerfile installs it), which makes WebGL exist and report a real
+    # renderer string; `--enable-unsafe-webgpu` lets an adapter appear on top
+    # of it. This is the same principle as driving real Chrome rather than the
+    # bundle: not a forged signal but a capability the browser is supposed to
+    # have, restored. It was the difference, for the other claimer projects that
+    # hit this wall, between a captcha that came back "incorrect response"
+    # forever and one a person could answer.
+    "--ignore-gpu-blocklist",
+    "--enable-unsafe-webgpu",
+]
+
+if settings.in_container:
+    LAUNCH_ARGS.extend(CONTAINER_ARGS)
 
 
 # Which browser channel actually worked, once we have found out. `False` means
@@ -323,14 +347,28 @@ def launch_detached(profile_path: Path, url: str):
         )
     profile_path = profile_path.resolve()
     profile_path.mkdir(parents=True, exist_ok=True)
+    args = [
+        str(executable),
+        f"--user-data-dir={profile_path}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if settings.in_container:
+        # The same sandbox and GPU flags the driven browser gets, for the same
+        # reasons; none of them is an automation flag. Plus a window the size
+        # of the Xvfb screen, placed at its origin: there is no window manager
+        # on that display to size or place anything, so a window left to its
+        # own devices opens at some default and the person sees a corner of it.
+        args += CONTAINER_ARGS
+        args += [
+            f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
+            "--window-position=0,0",
+            # The shared-memory problem is the same as for the driven browser.
+            "--disable-dev-shm-usage",
+        ]
+    args.append(url)
     return subprocess.Popen(
-        [
-            str(executable),
-            f"--user-data-dir={profile_path}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            url,
-        ],
+        args,
         # Detached, so the window outlives the request that opened it and
         # closing Trove does not kill somebody's half-finished sign-in.
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) if os.name == "nt" else 0,
@@ -357,6 +395,10 @@ class AccountBrowser:
         self.lock = asyncio.Lock()
         self.lease: Lease | None = None
         self.context: BrowserContext | None = None
+        # The un-driven sign-in window, while one is open. Kept so it can be
+        # closed from the interface: on a screen with no window manager there
+        # may be nothing to click to close it.
+        self.process: subprocess.Popen | None = None
 
 
 class BrowserManager:
@@ -388,6 +430,14 @@ class BrowserManager:
             entry = AccountBrowser(account_id, profile_path)
             self._accounts[account_id] = entry
         return entry
+
+    def holders(self) -> dict[int, str]:
+        """Every profile currently held, and by what. For the screen view's caption."""
+        return {
+            account_id: entry.lease.holder
+            for account_id, entry in self._accounts.items()
+            if entry.lease is not None
+        }
 
     def who_holds(self, account_id: int) -> str | None:
         entry = self._accounts.get(account_id)
@@ -481,6 +531,7 @@ class BrowserManager:
             entry.lease = None
             entry.lock.release()
             raise
+        entry.process = process
 
         async def _wait() -> None:
             try:
@@ -491,6 +542,7 @@ class BrowserManager:
                     await asyncio.sleep(2)
             finally:
                 entry.lease = None
+                entry.process = None
                 if entry.lock.locked():
                     entry.lock.release()
                 logger.info("The sign-in window for account %s has closed.", account_id)
@@ -513,6 +565,24 @@ class BrowserManager:
         task = asyncio.create_task(_wait(), name=f"trove-signin-{account_id}")
         self._signin_tasks.add(task)
         task.add_done_callback(self._signin_tasks.discard)
+
+    def close_local(self, account_id: int) -> bool:
+        """Ask the account's sign-in window to close. Returns whether there was one.
+
+        A polite terminate, not a kill: Chrome flushes its profile to disk on
+        SIGTERM (and on the close Windows sends), which is the whole point - the
+        session the person just created has to reach the directory. The waiter
+        in `open_local` sees the exit and releases the lock as usual.
+        """
+        entry = self._accounts.get(account_id)
+        if entry is None or entry.process is None or entry.process.poll() is not None:
+            return False
+        try:
+            entry.process.terminate()
+        except OSError as exc:  # pragma: no cover - already gone
+            logger.debug("Closing the sign-in window for %s: %s", account_id, exc)
+            return False
+        return True
 
     async def stop(self) -> None:
         """Shut Playwright down. Called from the app's lifespan."""

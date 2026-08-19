@@ -41,13 +41,30 @@ ENV PYTHONUNBUFFERED=1 \
     # The display the entrypoint's Xvfb puts up. Headed Chromium needs one, and
     # headed is the default for the reason in backend/app/browser.py.
     DISPLAY=:99 \
-    # Tells Trove nobody can see that display. Without it the app would offer
-    # the "sign in here" button - DISPLAY is set, after all - and open a window
-    # onto a framebuffer the user has no way to reach.
-    IN_CONTAINER=true
+    # Tells Trove it is in a container: Chrome gets --no-sandbox and the GPU
+    # flags, and "sign in here" is offered only through the screen view.
+    IN_CONTAINER=true \
+    # The VNC server the entrypoint puts on that display, so the person can
+    # see it through Trove's own interface. Localhost only; Trove bridges it.
+    # Set it empty to run without one.
+    VNC_ADDRESS=127.0.0.1:5900
 
+# xvfb: the display. x11vnc: shows it, which is what lets a person sign in to
+# an un-driven Chrome inside the container (see backend/app/routers/screen.py).
+#
+# The Mesa packages are not decoration. Without a GPU, Chrome under Xvfb turns
+# WebGL off and reports no WebGPU adapter, and a browser that says it is desktop
+# Chrome with no WebGL is the same kind of contradiction as the codec one: it is
+# exactly what a challenge logs ("No available adapters.") before refusing
+# every answer. With llvmpipe (libgl1-mesa-dri) and lavapipe
+# (mesa-vulkan-drivers) present and --ignore-gpu-blocklist set, WebGL exists and
+# reports a real renderer string. `python -m app.diagnose` prints what the
+# browser actually sees; run it before believing any of this.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tini xvfb gosu \
+    && apt-get install -y --no-install-recommends \
+        curl tini gosu \
+        xvfb x11vnc \
+        libgl1-mesa-dri libegl-mesa0 libgles2 libglx-mesa0 mesa-vulkan-drivers libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /tmp/requirements.txt

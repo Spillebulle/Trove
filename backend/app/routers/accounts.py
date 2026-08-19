@@ -229,7 +229,7 @@ async def sign_in_here(account_id: int, db: Session = Depends(get_db)) -> Accoun
     if account is None:
         raise HTTPException(404, "No such account.")
 
-    if not settings.has_visible_desktop:
+    if not (settings.has_visible_desktop or settings.has_screen_view):
         raise HTTPException(
             409,
             "Trove has no screen to open a browser window on, so you would "
@@ -304,9 +304,23 @@ def can_sign_in_here(account_id: int) -> dict:
     Lets the interface disable the button with a sentence rather than offering
     something that cannot work: a control that lies is worse than none.
     """
-    if not settings.has_visible_desktop:
+    # Two ways it can be possible, and the interface needs to know which:
+    # "desktop" means a window opens on the screen in front of the person;
+    # "screen" means it opens on Trove's own display (the container's Xvfb)
+    # and the person watches it through the screen view. The second is the
+    # container's answer to a challenge the live view cannot pass, because the
+    # window has nothing attached to it.
+    via = (
+        "desktop"
+        if settings.has_visible_desktop
+        else "screen"
+        if settings.has_screen_view
+        else None
+    )
+    if via is None:
         return {
             "ok": False,
+            "via": None,
             "reason": (
                 "Trove is running somewhere with no screen you could see a "
                 "browser window on, usually a container. Sign in on a desktop "
@@ -316,12 +330,28 @@ def can_sign_in_here(account_id: int) -> dict:
     if find_chrome_executable() is None:
         return {
             "ok": False,
+            "via": None,
             "reason": (
                 "No Google Chrome on this machine. Install it, or use the live "
                 "view."
             ),
         }
-    return {"ok": True, "reason": None}
+    return {"ok": True, "via": via, "reason": None}
+
+
+@router.post("/{account_id}/close-sign-in", status_code=204)
+def close_sign_in(account_id: int) -> Response:
+    """Close the account's sign-in window from here.
+
+    On a desktop the person closes the window themselves. On the container's
+    screen there is no window manager, so there may be nothing to click, and
+    this is the button instead. A polite terminate: Chrome writes the profile
+    out on it, and the waiter that opened the window releases the lock and
+    checks the session exactly as if it had been closed by hand.
+    """
+    if not manager.close_local(account_id):
+        raise HTTPException(409, "There is no sign-in window open for this account.")
+    return Response(status_code=204)
 
 
 @router.post("/{account_id}/reset-profile", response_model=AccountRead)

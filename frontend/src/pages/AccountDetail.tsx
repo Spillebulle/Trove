@@ -24,6 +24,7 @@ import {
   relativeTime,
 } from '@/lib/utils'
 import { LiveBrowser } from '@/components/LiveBrowser'
+import { ScreenView } from '@/components/ScreenView'
 import {
   ConfirmDialog,
   Dialog,
@@ -45,6 +46,9 @@ export function AccountDetail() {
   const { push } = useToast()
 
   const [liveOpen, setLiveOpen] = useState(false)
+  // The container's screen, for a sign-in window opened there. See
+  // `components/ScreenView.tsx` for why it is a different thing from the live view.
+  const [screenOpen, setScreenOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
@@ -110,7 +114,22 @@ export function AccountDetail() {
   const signInHere = useMutation({
     mutationFn: () => api.accounts.signInHere(accountId),
     onSuccess: () => {
-      push('A browser window is opening. Sign in, then close it.', 'good')
+      if (localSignIn.data?.via === 'screen') {
+        // The window opened on Trove's own screen, so show it.
+        setScreenOpen(true)
+      } else {
+        push('A browser window is opening. Sign in, then close it.', 'good')
+      }
+      refresh()
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const closeSignIn = useMutation({
+    mutationFn: () => api.accounts.closeSignIn(accountId),
+    onSuccess: () => {
+      setScreenOpen(false)
+      push('The window is closing. Trove will check the session in a moment.', 'good')
       refresh()
     },
     onError: (error: Error) => push(error.message, 'critical'),
@@ -201,11 +220,21 @@ export function AccountDetail() {
                 title={
                   busy
                     ? `The browser profile is in use by ${data.busy_with}.`
-                    : 'Open this account in a normal browser window on this machine.'
+                    : localSignIn.data.via === 'screen'
+                      ? "Open this account in a normal browser window on Trove's own screen, and show that screen here."
+                      : 'Open this account in a normal browser window on this machine.'
                 }
               >
                 {signInHere.isPending ? <Spinner /> : <ExternalLink className="size-icon" />}
                 Sign in here
+              </button>
+            )}
+            {/* The window is already open on the container's screen: offer
+                the screen itself rather than a second window. */}
+            {localSignIn.data?.via === 'screen' && data.busy_with === 'a sign-in window' && (
+              <button type="button" className="btn-secondary" onClick={() => setScreenOpen(true)}>
+                <Monitor className="size-icon" />
+                Show the screen
               </button>
             )}
             <button
@@ -268,7 +297,9 @@ export function AccountDetail() {
           <p className="min-w-0 flex-1">
             {data.status_reason ??
               (localSignIn.data?.ok
-                ? 'This account has not signed in yet. Open a browser window, sign in by hand, then close it. Trove takes it from there.'
+                ? localSignIn.data.via === 'screen'
+                  ? "This account has not signed in yet. Open a browser window on Trove's screen, sign in by hand, then close it. Trove takes it from there."
+                  : 'This account has not signed in yet. Open a browser window, sign in by hand, then close it. Trove takes it from there.'
                 : 'This account has not signed in yet. Open the live view, sign in by hand, and Trove takes it from there.')}
           </p>
           {localSignIn.data?.ok ? (
@@ -554,6 +585,51 @@ export function AccountDetail() {
                 setLiveOpen(false)
                 refresh()
               }}
+            />
+          )}
+        </div>
+      </Dialog>
+
+      {/*
+       * The container's screen, with the un-driven sign-in window on it. It
+       * can be closed and reopened freely - the window stays where it is -
+       * which is why it does not refuse to close the way the live view does.
+       * "Close the window" is the one thing it adds: there is no window
+       * manager on that screen, so there may be nothing to click to close it.
+       */}
+      <Dialog
+        open={screenOpen}
+        onClose={() => {
+          setScreenOpen(false)
+          refresh()
+        }}
+        title={`${data.label} on Trove's screen`}
+        subtitle="A normal browser window, opened inside the container with nothing attached to it."
+        size="large"
+      >
+        <div className="h-[60vh] min-h-[380px]">
+          {screenOpen && (
+            <ScreenView
+              onClose={() => {
+                setScreenOpen(false)
+                refresh()
+              }}
+              footer={
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => closeSignIn.mutate()}
+                  disabled={closeSignIn.isPending || data.busy_with !== 'a sign-in window'}
+                  title={
+                    data.busy_with === 'a sign-in window'
+                      ? 'Close the sign-in window. Trove then checks whether the account is signed in.'
+                      : 'There is no sign-in window open for this account.'
+                  }
+                >
+                  {closeSignIn.isPending ? <Spinner /> : null}
+                  Done, close the window
+                </button>
+              }
             />
           )}
         </div>

@@ -22,7 +22,7 @@ from .auth import bootstrap_admin
 from .browser import manager
 from .config import get_settings
 from .db import init_db
-from .routers import accounts, ledger, live, settings as settings_router
+from .routers import accounts, ledger, live, screen, settings as settings_router
 
 settings = get_settings()
 
@@ -93,6 +93,7 @@ for router in (
     accounts.router,
     ledger.router,
     live.router,
+    screen.router,
 ):
     app.include_router(router)
 

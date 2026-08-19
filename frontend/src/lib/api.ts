@@ -106,9 +106,10 @@ export const api = {
     signInHere: (id: number) => post<Account>(`/api/accounts/${id}/sign-in-here`),
     checkSession: (id: number) => post<Account>(`/api/accounts/${id}/check-session`),
     canSignInHere: (id: number) =>
-      request<{ ok: boolean; reason: string | null }>(
+      request<{ ok: boolean; via: 'desktop' | 'screen' | null; reason: string | null }>(
         `/api/accounts/${id}/can-sign-in-here`,
       ),
+    closeSignIn: (id: number) => post<void>(`/api/accounts/${id}/close-sign-in`),
     canOpenLive: (id: number) =>
       request<{ ok: boolean; reason: string | null }>(`/api/live/${id}/can-open`),
   },
@@ -137,7 +138,41 @@ export const api = {
       post<TestResult>('/api/settings/notify/test', { channel, webhook_url }),
   },
 
+  screen: {
+    available: () =>
+      request<{ ok: boolean; reason: string | null; holders?: Record<string, string> }>(
+        '/api/screen/available',
+      ),
+  },
+
+  diagnostics: {
+    // Launches a browser and asks it what it is. Seconds, not milliseconds.
+    browser: () => request<BrowserDiagnostics>('/api/diagnostics/browser'),
+  },
+
   screenshotUrl: (name: string) => `/api/screenshots/${encodeURIComponent(name)}`,
+}
+
+export interface BrowserFinding {
+  level: 'critical' | 'caution' | 'info'
+  text: string
+}
+
+/** What `python -m app.diagnose` prints; see `backend/app/diagnose.py`. */
+export interface BrowserDiagnostics {
+  trove: string
+  headless: boolean
+  in_container: boolean
+  display: string | null
+  vnc: string | null
+  channel_setting: string
+  channel?: string
+  browser_version?: string | null
+  launch_args: string[]
+  page?: Record<string, unknown>
+  error?: string
+  seconds: number
+  findings: BrowserFinding[]
 }
 
 /**
@@ -151,4 +186,10 @@ export const api = {
 export function liveSocketUrl(accountId: number): string {
   const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${scheme}//${window.location.host}/api/live/${accountId}`
+}
+
+/** The container's screen, bridged to its VNC server. See `ScreenView.tsx`. */
+export function screenSocketUrl(): string {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${window.location.host}/api/screen`
 }

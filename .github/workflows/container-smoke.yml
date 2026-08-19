@@ -1,0 +1,152 @@
+# Builds the image and actually starts it. ci.yml checks the code imports and
+# docker.yml publishes the image, but neither ever runs a container, and every
+# container fault this project has had (the missing xdpyinfo, the sandbox, the
+# GPU) was of the kind that only shows when one starts. This is that run.
+#
+# What it proves, in order: the image builds; the entrypoint brings up Xvfb and
+# the VNC server; the API answers; the browser launches the way a claim run
+# launches it and reports what it is (`python -m app.diagnose`, whose output is
+# the point of the job - read it); and an un-driven sign-in window can be opened
+# on the container's screen and closed again through the API, with no
+# automation flags on its command line.
+#
+# It does not prove a claim works. That needs a signed-in account, and no
+# account is going to be signed in on a CI runner.
+name: Container smoke test
+
+on:
+  push:
+    branches: [main, 'container/**']
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Build, start, probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ADMIN_PASSWORD: smoke-test-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: trove:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the container
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          docker run -d --name trove \
+            -p 8080:8080 \
+            -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+            -e PUID="$(id -u)" -e PGID="$(id -g)" \
+            -e LOG_LEVEL=DEBUG \
+            --shm-size=1g \
+            -v "$PWD/data:/data" \
+            trove:smoke
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
+              echo "healthy after ${i}s"; break
+            fi
+            if ! docker ps -q -f name=trove | grep -q .; then
+              echo "::error::the container exited"; docker logs trove; exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/api/health
+          echo
+
+      - name: The display and the VNC server are up
+        run: |
+          set -euo pipefail
+          docker exec trove sh -c 'ls -l /tmp/.X11-unix/ && pgrep -a Xvfb && pgrep -a x11vnc'
+          # A VNC server introduces itself with its protocol version.
+          docker exec trove bash -c 'exec 3<>/dev/tcp/127.0.0.1/5900 && head -c 12 <&3'
+          echo
+
+      - name: What the browser sees (python -m app.diagnose)
+        run: |
+          set -euo pipefail
+          docker exec -u pwuser -w /app trove python -m app.diagnose | tee diagnose.json
+          echo "----- findings -----"
+          python3 -c '
+          import json; r = json.load(open("diagnose.json"))
+          for f in r.get("findings", []): print(f"[{f[\"level\"]}] {f[\"text\"]}")
+          print("channel:", r.get("channel"), "| version:", r.get("browser_version"))
+          p = r.get("page") or {}
+          print("webgl:", p.get("webgl")); print("webgpu:", p.get("webgpu")); print("codecs:", p.get("codecs"))
+          assert r.get("channel") == "chrome", "not driving real Chrome"
+          assert not r.get("error"), r.get("error")
+          '
+
+      - name: Sign-in window on the container screen, opened and closed through the API
+        run: |
+          set -euo pipefail
+          jar=$(mktemp)
+          curl -fsS -c "$jar" -H 'content-type: application/json' \
+            -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASSWORD\"}" \
+            http://127.0.0.1:8080/api/auth/login >/dev/null
+          acct=$(curl -fsS -b "$jar" -H 'content-type: application/json' \
+            -d '{"store":"epic","label":"smoke"}' http://127.0.0.1:8080/api/accounts)
+          id=$(echo "$acct" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          echo "account $id"
+          echo "--- can-sign-in-here"
+          curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id/can-sign-in-here"; echo
+          curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id/can-sign-in-here" | grep -q '"via":"screen"'
+          echo "--- screen/available"
+          curl -fsS -b "$jar" http://127.0.0.1:8080/api/screen/available; echo
+          echo "--- sign-in-here"
+          curl -fsS -b "$jar" -X POST "http://127.0.0.1:8080/api/accounts/$id/sign-in-here" >/dev/null
+          sleep 8
+          echo "--- the window's command line (must carry no automation flags)"
+          # The un-driven window is the Chrome main process that carries the
+          # window geometry; renderer children carry --type=.
+          docker exec trove sh -c 'pgrep -af "window-position=0,0" | grep -v "type="' | tee cmdline.txt
+          test -s cmdline.txt || { echo "::error::no sign-in window process found"; exit 1; }
+          if grep -Eq -- '--remote-debugging|--enable-automation|--headless' cmdline.txt; then
+            echo "::error::automation flags on the un-driven window"; exit 1
+          fi
+          echo "--- the account shows the window as holding the profile"
+          curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id" | python3 -c 'import json,sys; a=json.load(sys.stdin); print("busy_with:", a.get("busy_with"))'
+          echo "--- close-sign-in"
+          curl -fsS -b "$jar" -X POST "http://127.0.0.1:8080/api/accounts/$id/close-sign-in" -o /dev/null -w '%{http_code}\n'
+          sleep 6
+          # Only the un-driven window must be gone. The session check Trove
+          # runs after it closes opens the profile with Playwright, and that
+          # one carries --remote-debugging-pipe.
+          if docker exec trove sh -c 'pgrep -af "window-position=0,0" | grep -v "type=" >/dev/null'; then
+            echo "::error::the window is still open after close-sign-in"; exit 1
+          fi
+          echo "closed"
+          sleep 20
+          echo "--- the account after the window closed (the session check should have run)"
+          curl -fsS -b "$jar" "http://127.0.0.1:8080/api/accounts/$id" | python3 -c 'import json,sys; a=json.load(sys.stdin); print({k: a.get(k) for k in ("status","status_reason","busy_with","last_checked_at")})'
+
+      - name: Container log
+        if: always()
+        run: docker logs trove 2>&1 | tail -200
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnose
+          path: |
+            diagnose.json
+            cmdline.txt
+          if-no-files-found: ignore

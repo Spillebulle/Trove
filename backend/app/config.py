@@ -135,6 +135,46 @@ class Settings(BaseSettings):
     # Set by the Dockerfile. There is no reason to set it by hand.
     in_container: bool = False
 
+    # --- The container's screen ------------------------------------------
+    #
+    # Where a VNC server is showing the display Trove's browsers draw on, as
+    # `host:port`. The entrypoint starts x11vnc on the Xvfb display and sets
+    # this to `127.0.0.1:5900`; on a desktop it stays empty. When it is set,
+    # "sign in here" works in a container: the un-driven Chrome opens on the
+    # framebuffer and the person watches it through `/api/screen`, which is
+    # Trove's own authenticated WebSocket bridged to that VNC port.
+    #
+    # Why this and not the live view: the live view needs the DevTools protocol
+    # attached, a page can tell when it is, and a challenge that has decided a
+    # browser is driven will not take an answer from it. VNC reads pixels off
+    # the X server; the browser has nothing attached to it at all.
+    vnc_address: str = ""
+
+    @property
+    def vnc_endpoint(self) -> tuple[str, int] | None:
+        raw = (self.vnc_address or "").strip()
+        if not raw:
+            return None
+        host, _, port = raw.rpartition(":")
+        try:
+            return (host or "127.0.0.1", int(port))
+        except ValueError:
+            return None
+
+    @property
+    def has_screen_view(self) -> bool:
+        """Can a person watch Trove's own display through the interface?
+
+        True in a container whose entrypoint put a VNC server on the Xvfb
+        display. It is what lets "sign in here" exist there: the browser window
+        goes on a screen nobody stands in front of, but one they can see.
+        """
+        if self.headless:
+            return False
+        if self.vnc_endpoint is None:
+            return False
+        return bool(os.environ.get("DISPLAY"))
+
     @property
     def has_visible_desktop(self) -> bool:
         """Could a person actually see a browser window Trove opened?

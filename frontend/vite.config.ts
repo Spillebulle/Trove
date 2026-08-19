@@ -24,5 +24,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // noVNC 1.7 (the screen view's RFB client) uses top-level await, which
+    // Vite's default es2020 target refuses. Every browser that can open this
+    // app can do es2022.
+    target: 'es2022',
   },
 })
