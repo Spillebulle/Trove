@@ -63,8 +63,6 @@ const NAV_GROUPS: Array<{ eyebrow?: string; items: NavItem[] }> = [
 
 const SETTINGS_ITEM: NavItem = { to: '/settings', label: 'Settings', icon: SettingsIcon }
 
-const VERSION = '0.1.0'
-
 function NavRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
   const Icon = item.icon
   return (
@@ -134,12 +132,32 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+/**
+ * The version, read from the API rather than stated here.
+ *
+ * It used to be a `const VERSION = '0.1.0'` in this file, which is a second
+ * source of truth and behaved exactly as a second source of truth does: the
+ * backend went to 0.1.4 and the sidebar went on saying 0.1.0, so a correct
+ * upgrade looked like a failed one. `/api/health` reports the build that is
+ * actually serving the page, so the two cannot disagree, and a stale cached
+ * bundle now reports the *server's* version rather than its own.
+ *
+ * There is one source of truth for the version and it is
+ * `backend/app/__init__.py`, which the release workflow also checks against
+ * the git tag.
+ */
 function SidebarFooter() {
+  const { data } = useQuery({
+    queryKey: ['health'],
+    queryFn: api.health,
+    staleTime: 5 * 60_000,
+  })
   return (
     <div className="flex h-status shrink-0 items-center justify-between gap-2 border-t border-line px-strip">
       <span className="truncate text-tiny text-dim">
-        {/* A version is read as a value, so it is monospaced and tabular. */}
-        <span className="figure">v{VERSION}</span> · GPL-3.0
+        {/* A version is read as a value, so it is monospaced and tabular. An
+            en dash until it is known, never a guess. */}
+        <span className="figure">{data ? `v${data.version}` : '–'}</span> · GPL-3.0
       </span>
     </div>
   )

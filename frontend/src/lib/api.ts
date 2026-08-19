@@ -1,6 +1,7 @@
 import type {
   Account,
   AuthStatus,
+  Health,
   Claim,
   Offer,
   Run,
@@ -80,6 +81,13 @@ export const api = {
     changePassword: (current_password: string, new_password: string) =>
       post<void>('/api/auth/password', { current_password, new_password }),
   },
+
+  /**
+   * The running version, among other things. Unauthenticated on purpose: it is
+   * what the container's healthcheck hits, and the sidebar reads it so the
+   * interface reports the build it is actually talking to.
+   */
+  health: () => request<Health>('/api/health'),
 
   summary: () => request<Summary>('/api/summary'),
 

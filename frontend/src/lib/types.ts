@@ -118,6 +118,13 @@ export interface SettingsPayload {
   scheduler: { running: boolean; watching: number[] }
 }
 
+export interface Health {
+  status: string
+  /** The version of the backend that is actually running. */
+  version: string
+  app: string
+}
+
 export interface AuthStatus {
   authenticated: boolean
   username: string | null

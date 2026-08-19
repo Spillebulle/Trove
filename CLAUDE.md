@@ -575,6 +575,13 @@ session trusting something nobody has run.
   UI should say so quietly rather than in `critical`.
 - Colouring a status with the accent, or filling a selected row with it. §2.4 is
   a closed list and this app has more status than most.
+- Stating the version anywhere but `backend/app/__init__.py`. The sidebar used
+  to carry `const VERSION = '0.1.0'` of its own, so upgrading the backend to
+  0.1.4 left the interface reporting 0.1.0 and a correct upgrade looked like a
+  failed one. It reads `/api/health` now, which is the build actually serving
+  the page - so a stale cached bundle reports the *server's* version rather
+  than its own. `frontend/package.json` no longer carries a version field at
+  all. The release workflow checks the one remaining number against the git tag.
 - Letting a naive datetime out of the API. SQLite returns every stored datetime
   without an offset, and `new Date()` reads an offset-less string as *local*
   time, so a run that just finished read as "2 hours ago" on a UTC+2 machine.
