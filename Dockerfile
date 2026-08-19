@@ -84,6 +84,15 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN playwright install --with-deps chrome \
     && rm -rf /var/lib/apt/lists/*
 
+# Chrome's own way of not showing the "--no-sandbox" infobar: an enterprise
+# policy. It is a bar across the top of the screen view on every container
+# where the sandbox probe had to fall back, the page cannot see the flag either
+# way, and `--test-type` (the other way to hide it) is an automation flag this
+# window must not carry. The policy only changes Chrome's own chrome.
+RUN mkdir -p /etc/opt/chrome/policies/managed \
+    && echo '{ "CommandLineFlagSecurityWarningsEnabled": false }' \
+       > /etc/opt/chrome/policies/managed/trove.json
+
 # The base image ships browsers for the `pwuser` it creates. Trove runs as that
 # user so it can read them, and the entrypoint remaps its ids to PUID/PGID at
 # startup so it can also write to a bind-mounted /data owned by the host user.
