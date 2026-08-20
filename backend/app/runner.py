@@ -473,7 +473,7 @@ async def _do_run(
                 await _hold_open_for_watch(account.id)
 
 
-async def _run_claims(db, account, run, adapter, page, pending, waiter=None) -> None:
+async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
     """Health-check the session, then attempt each pending offer."""
     store = account.store
 
@@ -506,7 +506,7 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter=None) -> 
             db.commit()
             continue
 
-        result = await adapter.claim(page, offer)
+        result = await adapter.claim(page, offer, waiter=waiter)
         _record(
             db,
             account,

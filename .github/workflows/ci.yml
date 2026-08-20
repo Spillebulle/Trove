@@ -69,3 +69,8 @@ jobs:
           print(f'{len(routes)} API routes registered')
           assert '/api/health' in routes
           "
+
+      - name: Checkout captcha/consent wiring (no browser)
+        env:
+          DATA_DIR: ./ci-data
+        run: python tools/checkout_sim.py
