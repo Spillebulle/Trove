@@ -721,14 +721,28 @@ session trusting something nobody has run.
   any focus emulation. So the container case `live.enable_focus` was kept for
   is also not a case where it changes anything observed.
 
+**The checkout, as of Aug 2026 (from a real signed-in account):** the
+`/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
+browser, and for a *free* game it reads "This is free. Add it to your library
+to get started." with a single **"Add to library"** button - the age and EULA
+consent folded into that click, no separate agreement step. So `PLACE_ORDER`
+now leads with `Add to library`; `CONFIRMED` was broadened; and after the click
+the claim falls back to checking the product page for ownership as ground
+truth, because the confirmation wording is unknown and a missing banner is not
+proof of failure. Seen but not on the free game: a "not compatible with your
+device" notice with a "Continue" (the store's own "Get" flow shows it), stepped
+past best-effort by `COMPAT_CONTINUE`. Verified from a watched run's screenshot;
+the click-through to a confirmed claim is the last unproven step - see below.
+
 **Written and NOT verified:**
 
-- **Epic's checkout.** `PLACE_ORDER`, `AGREEMENT`, `CONFIRMED`, `OWNED` and
-  `NOT_ELIGIBLE` in `adapters/epic.py` were written from how the flow is known
-  to work and have never run against a signed-in account. They are all in one
-  table at the top of that file for exactly this reason. The failure mode is
-  safe by construction: anything unrecognised raises `NeedsAttention` with a
-  screenshot rather than clicking something else.
+- **The last checkout step: the click, and confirmation.** The button is
+  now known (`Add to library`, verified from a real checkout), and the run
+  reaches it. What has *not* been seen through is clicking it and reading a
+  confirmed claim back - the user interrupted before the click. So the click,
+  the confirmation wording, and the ownership fallback are all still unproven
+  against a real account. Safe by construction: an unrecognised page raises
+  `NeedsAttention` with a screenshot rather than clicking something else.
 - **The claim itself, on a real account.** Everything up to the checkout is now
   proven against a live signed-in session. `PLACE_ORDER`, `AGREEMENT`,
   `CONFIRMED` and the rest have still never run, so the first real claim is

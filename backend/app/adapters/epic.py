@@ -120,14 +120,32 @@ CHALLENGE = [
 # that places the order". Watch a run (Run and watch) to read the real label
 # off the screen, then add it here.
 PLACE_ORDER = [
+    # The current one, verified from a real checkout (Aug 2026): a free game's
+    # purchase overlay says "This is free. Add it to your library to get
+    # started." with a single "Add to library" button, and the age/EULA consent
+    # is folded into that click rather than a separate step. This is the button
+    # that actually claims, so it leads.
+    'button:has-text("Add to library")',
+    'button:has-text("Add To Library")',
+    'button:has-text("Add to Library")',
+    # Older and paid-flow variants, kept because Epic runs several checkouts at
+    # once and renames this button often. Extend this list, do not replace it.
     'button:has-text("Place Order")',
     'button:has-text("Get Now")',
-    'button:has-text("Get")',
     'button:has-text("Confirm")',
     'button[data-testid="purchase-cta-button"]',
     '[data-testid="purchase-cta-button"]',
     'button.payment-btn',
-    '#purchase-app button:has-text("Place Order")',
+]
+
+# A device-compatibility notice ("This product is not compatible with your
+# current device") that Epic can put up before the checkout button. It is a
+# warning, not a challenge, and the store's own "Get" flow shows a "Continue"
+# to move past it. Dismissed best-effort; absent for most games and for the
+# free game verified in Aug 2026, which went straight to "Add to library".
+COMPAT_CONTINUE = [
+    'div[role="dialog"] button:has-text("Continue")',
+    'button:has-text("Continue")',
 ]
 
 # Epic asks for agreement to a refund policy or an end user licence before the
@@ -141,7 +159,11 @@ AGREEMENT = [
 # The order went through.
 CONFIRMED = [
     'text=/thank you for (your order|buying)/i',
-    'text=/order (complete|confirmed)/i',
+    'text=/thanks for your (order|purchase)/i',
+    'text=/order (complete|confirmed|successful)/i',
+    'text=/success/i',
+    'text=/(in|added to) your library/i',
+    'text=/you now own/i',
     '[data-testid="purchase-confirmation"]',
 ]
 
@@ -336,13 +358,22 @@ class EpicAdapter(BaseAdapter):
                 detail="Epic will not sell this to your account, usually a region limit.",
             )
 
+        # A device-compatibility "Continue" can sit in front of the button on
+        # some titles; step past it if it is there. Best-effort and quick, so a
+        # game that never shows one (the common case) is not slowed.
+        compat = await _first_visible(page, COMPAT_CONTINUE, timeout_ms=1000)
+        if compat is not None:
+            logger.info("Epic checkout: dismissing a device-compatibility notice.")
+            await compat.click()
+
         logger.info("Epic checkout: looking for the order button for %r.", offer.title)
-        order = await _first_visible(page, PLACE_ORDER, timeout_ms=8000)
+        order = await _first_visible(page, PLACE_ORDER, timeout_ms=10000)
         if order is None:
             raise NeedsAttention(
-                "Could not find the button that places the order. Epic has "
-                "probably changed the checkout. Run this with \"Run and watch\" "
-                "to see the page, then the button's label goes in PLACE_ORDER.",
+                "Could not find the button that adds the game to your library. "
+                "Epic has probably changed the checkout. Run this with "
+                "\"Run and watch\" to see the page, then the button's label "
+                "goes in PLACE_ORDER.",
                 await self._shot(page, offer, "no-order-button"),
             )
 
@@ -371,9 +402,23 @@ class EpicAdapter(BaseAdapter):
                 outcome="already_owned", detail="Already in your library."
             )
 
+        # The confirmation banner's wording changes and a missing one is not
+        # proof of failure - ownership is. Ask the product page directly: if the
+        # account now owns it, the "Add to library" click worked whatever the
+        # overlay said. This is the ground truth the banner only hints at.
+        if offer.url:
+            logger.info("Epic checkout: no banner; checking the library directly.")
+            try:
+                await _goto(page, offer.url)
+                if await _first_visible(page, OWNED, timeout_ms=6000):
+                    logger.info("Epic checkout: %r is now in the library.", offer.title)
+                    return ClaimResult(outcome="claimed", detail="Added to your library.")
+            except PlaywrightTimeout:
+                pass
+
         raise NeedsAttention(
-            "The order was placed but Epic did not confirm it. Check the "
-            "account before Trove tries again.",
+            "The game was ordered but Trove could not confirm it landed in the "
+            "library. Check the account before Trove tries again.",
             await self._shot(page, offer, "unconfirmed"),
         )
 
