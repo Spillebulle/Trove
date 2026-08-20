@@ -226,21 +226,41 @@ async def _goto(page: Page, url: str) -> None:
 
 
 async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 1500):
-    """The first of these selectors that is actually on screen, or None.
+    """The first visible element matching any of these selectors, or None.
 
-    Short timeout by design. This asks "which of these several shapes is the
-    page in", and a long wait on the wrong shape is a long wait per candidate.
-    The waiting for a page to *become* something is done by the caller, once.
+    **All the selectors are waited on together, in one `timeout_ms`.** The old
+    version waited the full timeout for *each* selector in turn, so asking "is
+    there a captcha?" against seven selectors when there is none cost seven
+    timeouts - about eight seconds - and the checkout loop paid that several
+    times over. Playwright's `or_` unions the locators so a single `wait_for`
+    watches all of them at once, and `filter(visible=True)` keeps a hidden
+    element that happens to sort first in the DOM from masking a visible match.
     """
+    combined = None
     for selector in selectors:
-        try:
-            locator = page.locator(selector).first
-            await locator.wait_for(state="visible", timeout=timeout_ms)
-            return locator
-        except PlaywrightTimeout:
-            continue
-        except Exception as exc:  # a malformed selector is a bug, not a page state
-            logger.debug("Selector %r did not resolve: %s", selector, exc)
+        loc = page.locator(selector)
+        combined = loc if combined is None else combined.or_(loc)
+    if combined is None:
+        return None
+    try:
+        # One wait for any of them to exist - the fast "is none of this here"
+        # path costs a single timeout, not one per selector.
+        await combined.first.wait_for(state="attached", timeout=timeout_ms)
+    except PlaywrightTimeout:
+        return None
+    except Exception as exc:  # a malformed selector is a bug, not a page state
+        logger.debug("Selector group did not resolve: %s", exc)
+        return None
+    # Then return the first *visible* match, so a hidden element that sorts
+    # first in the DOM does not mask the button a person would click.
+    try:
+        count = await combined.count()
+        for index in range(count):
+            element = combined.nth(index)
+            if await element.is_visible():
+                return element
+    except Exception as exc:
+        logger.debug("Visibility scan failed: %s", exc)
     return None
 
 
@@ -417,9 +437,9 @@ class EpicAdapter(BaseAdapter):
         screen (a watched run, ``waiter`` given) or stop and ask (a scheduled
         run). Trove never solves it.
         """
-        if await _first_visible(page, CHALLENGE, timeout_ms=1200):
+        if await _first_visible(page, CHALLENGE, timeout_ms=700):
             await self._handle_challenge(page, offer, waiter)
-        if await _first_visible(page, SIGNED_OUT, timeout_ms=1000):
+        if await _first_visible(page, SIGNED_OUT, timeout_ms=600):
             raise NeedsAttention(
                 "This account is signed out of Epic. Sign in again in the live "
                 "view.",
@@ -483,7 +503,7 @@ class EpicAdapter(BaseAdapter):
         clicked = 0
         for _ in range(12):
             await self._guard(page, offer, waiter)
-            if await _first_visible(page, CONFIRMED, timeout_ms=1200):
+            if await _first_visible(page, CONFIRMED, timeout_ms=600):
                 logger.info("Epic checkout: confirmed %r.", offer.title)
                 return "claimed"
             if await _first_visible(page, OWNED, timeout_ms=700):
@@ -516,7 +536,7 @@ class EpicAdapter(BaseAdapter):
 
             if await self._click(page, offer, target, waiter):
                 clicked += 1
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(600)
             # If the click did not land (a captcha was handled instead), just
             # loop and re-read the page - what is actionable has changed.
         return None
