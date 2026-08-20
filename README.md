@@ -107,6 +107,18 @@ you. Nothing that runs on a schedule can read the details.
 Check **Remember me** when you sign in: without it Epic's session is dropped
 when the browser closes, and no amount of session-keeping can hold it.
 
+## If the checkout fails with a network error
+
+If a claim gets through the captcha and the dialogs but then shows Epic's **"An
+error occurred while trying to process your request. Please check your network
+connection"**, that error is from Epic and it is almost always **IPv6**: the
+container reaches Epic's `*.ol.epicgames.com` payment hosts over IPv6, which has
+no working route, and the order request hangs. Turn IPv6 off in the container -
+uncomment the `sysctls` block in `docker-compose.yml`
+(`net.ipv6.conf.all.disable_ipv6=1`) and `docker compose up -d` again. Trove
+also names the failing request in the account's attention message, so you can
+see which host it was.
+
 ## Watching a claim
 
 Once you are signed in, **Run and watch** runs the claim on the container's

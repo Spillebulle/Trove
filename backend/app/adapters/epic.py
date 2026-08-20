@@ -206,6 +206,34 @@ ERROR = [
 ]
 
 
+# Epic's own backend hosts, the ones the checkout talks to rather than the
+# CDN/Cloudflare front. A failure here - not on the store page - is what shows
+# as "an error occurred, check your network connection", and the `.ol.` hosts
+# are the ones this app has already seen resolve to an IPv6 address a container
+# cannot reach (discovery uses an `-ipv4` host for the same reason).
+_EPIC_BACKEND = (
+    ".ol.epicgames.com",
+    "payment-website-pci",
+    "account-public-service",
+    "eulatracking",
+    "/purchase/",
+    "store.epicgames.com/graphql",
+)
+
+
+def _is_epic_backend(url: str) -> bool:
+    return any(fragment in url for fragment in _EPIC_BACKEND)
+
+
+def _net_note(net_errors) -> str:
+    """A sentence naming the failed backend requests, for an attention reason."""
+    if not net_errors:
+        return ""
+    # The last few are the ones that matter; the order request is last.
+    tail = "; ".join(net_errors[-3:])
+    return f" The failing request(s): {tail}."
+
+
 async def _goto(page: Page, url: str) -> None:
     """Navigate, tolerating a navigation the page replaced under us.
 
@@ -376,13 +404,49 @@ class EpicAdapter(BaseAdapter):
                 detail="This offer has no Epic namespace, so it cannot be claimed.",
             )
 
+        # Watch Epic's backend requests, so a checkout that fails names the
+        # request that failed instead of leaving us to guess. This is what turns
+        # "an error occurred" into "POST .../confirm-order -> net::ERR_...".
+        net_errors: list[str] = []
+
+        def _on_request_failed(request) -> None:
+            if _is_epic_backend(request.url):
+                where = request.url.split("?", 1)[0]
+                msg = f"{request.method} {where} -> {request.failure}"
+                net_errors.append(msg)
+                logger.warning("Epic backend request FAILED: %s", msg)
+
+        def _on_response(response) -> None:
+            try:
+                if response.status >= 400 and _is_epic_backend(response.url):
+                    where = response.url.split("?", 1)[0]
+                    msg = f"{response.request.method} {where} -> HTTP {response.status}"
+                    net_errors.append(msg)
+                    logger.warning("Epic backend request error: %s", msg)
+            except Exception:  # a response object mid-teardown is not worth failing on
+                pass
+
+        page.on("requestfailed", _on_request_failed)
+        page.on("response", _on_response)
+        try:
+            return await self._claim(page, offer, waiter, namespace, offer_id, net_errors)
+        finally:
+            try:
+                page.remove_listener("requestfailed", _on_request_failed)
+                page.remove_listener("response", _on_response)
+            except Exception:
+                pass
+
+    async def _claim(
+        self, page, offer, waiter, namespace, offer_id, net_errors
+    ) -> ClaimResult:
         url = _purchase_url(namespace, offer_id)
         try:
             await _goto(page, url)
         except PlaywrightTimeout:
             raise NeedsAttention(
                 "Epic's checkout did not load. It may be under load, or the "
-                "session may have expired.",
+                "session may have expired." + _net_note(net_errors),
                 await self._shot(page, offer, "checkout-timeout"),
             ) from None
 
@@ -403,7 +467,7 @@ class EpicAdapter(BaseAdapter):
         # "Continue" - until it confirms. A step-loop rather than a fixed
         # order, because Epic interleaves these differently per title and a
         # captcha can land between any two of them.
-        outcome = await self._drive_checkout(page, offer, waiter)
+        outcome = await self._drive_checkout(page, offer, waiter, net_errors)
         if outcome is not None:
             detail = {
                 "claimed": "Added to your library.",
@@ -427,7 +491,7 @@ class EpicAdapter(BaseAdapter):
 
         raise NeedsAttention(
             "The game was ordered but Trove could not confirm it landed in the "
-            "library. Check the account before Trove tries again.",
+            "library. Check the account before Trove tries again." + _net_note(net_errors),
             await self._shot(page, offer, "unconfirmed"),
         )
 
@@ -481,7 +545,9 @@ class EpicAdapter(BaseAdapter):
 
         await waiter.wait(_cleared, image_name=shot)
 
-    async def _drive_checkout(self, page: Page, offer: FreeOffer, waiter) -> str | None:
+    async def _drive_checkout(
+        self, page: Page, offer: FreeOffer, waiter, net_errors=None
+    ) -> str | None:
         """Click through the checkout until it confirms. Returns an outcome or None.
 
         Phase-aware, and that matters. **The add-to-library button is clicked at
@@ -528,9 +594,10 @@ class EpicAdapter(BaseAdapter):
             if await _first_visible(page, ERROR, timeout_ms=400) is not None:
                 raise NeedsAttention(
                     "Epic returned an error at the checkout (its \"could not "
-                    "process your request\" message). It can be a passing "
-                    "hiccup - try the run again - or the account's address being "
-                    "refused; the screenshot shows it.",
+                    "process your request\" message)." + _net_note(net_errors)
+                    + " If a request to one of Epic's `.ol.epicgames.com` hosts "
+                    "failed to connect, it is the container's networking - most "
+                    "likely IPv6; see the README.",
                     await self._shot(page, offer, "checkout-error"),
                 )
 

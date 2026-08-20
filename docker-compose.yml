@@ -27,6 +27,16 @@ services:
     # Below about 512 MB it crashes part-way through a heavy store page, which
     # presents as a claim that fails for no reason on some games and not others.
     shm_size: 1gb
+    # If a claim fails at Epic's *checkout* with "An error occurred while trying
+    # to process your request. Please check your network connection" - while the
+    # store, the captcha and the dialogs all load fine - it is almost always
+    # IPv6. The container gets an IPv6 address but no working IPv6 route, so
+    # Chrome reaches Epic's `.ol.epicgames.com` payment hosts over v6 and the
+    # request hangs (the same reason discovery uses an `-ipv4` host). Turning
+    # IPv6 off inside the container makes Chrome use IPv4, which Epic answers.
+    # Uncomment if you hit it:
+    #sysctls:
+    #  - net.ipv6.conf.all.disable_ipv6=1
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
       interval: 30s

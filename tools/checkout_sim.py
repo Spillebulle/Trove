@@ -128,6 +128,12 @@ async def main() -> int:
         async def wait_for_timeout(self, ms):
             pass
 
+        def on(self, *a, **k):
+            pass
+
+        def remove_listener(self, *a, **k):
+            pass
+
     epic._first_visible = fake_first_visible
 
     async def _nogoto(page, url):
