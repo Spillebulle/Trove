@@ -104,6 +104,8 @@ class AccountRead(Read):
     next_run_at: datetime | None
     # Whether a TOTP secret is stored, never the secret itself.
     has_totp: bool
+    # A watched run is paused on a captcha waiting for the person on the screen.
+    waiting_for_captcha: bool = False
     # The stored sign-in email, so the person can see which account it is; the
     # password only as a yes/no.
     login_email: str | None = None

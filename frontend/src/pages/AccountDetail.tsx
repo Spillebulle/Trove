@@ -941,11 +941,13 @@ export function AccountDetail() {
           {watchOpen && (
             <ScreenView
               status={
-                data.status === 'needs_attention'
-                  ? (data.status_reason ?? 'The run stopped and needs a hand.')
-                  : data.busy_with === 'a claim run'
-                    ? 'Running… the browser is held open here until you press Done.'
-                    : 'Starting the run…'
+                data.waiting_for_captcha
+                  ? '⚠ Epic wants a captcha — solve it on the screen below. The claim continues on its own the moment it clears.'
+                  : data.status === 'needs_attention'
+                    ? (data.status_reason ?? 'The run stopped and needs a hand.')
+                    : data.busy_with === 'a claim run'
+                      ? 'Running… the browser is held open here until you press Done.'
+                      : 'Starting the run…'
               }
               onClose={() => {
                 stopWatch.mutate()

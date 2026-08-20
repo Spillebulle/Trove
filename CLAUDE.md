@@ -344,6 +344,33 @@ can read the exact page Epic showed rather than a screenshot after the fact.
 The stop is sticky (`_watch_stop`) so a Done pressed before the hold starts is
 not lost. Outside watch mode none of this runs.
 
+**Interactive captchas at checkout (hCaptcha / Talon).** Epic can raise an
+image hCaptcha the instant "Add to library" is pressed, and its iframe covers
+the button - which made the naive click loop for 45 s and die with a raw
+`TimeoutError`. The rule is unchanged and absolute: **Trove never solves a
+captcha.** What it does now: the checkout click is captcha-aware
+(`epic._click_through`), so a blocked click is recognised as a challenge rather
+than hammered. In a *watched* run it pauses - `runner._CaptchaWaiter`, handed to
+`adapter.claim` as the `ChallengeWaiter` - keeps the browser open on the
+container's screen, and the person solves the hCaptcha there; the moment the
+challenge clears the claim resumes on its own. `waiting_for_captcha` on the
+account read drives the "solve it on the screen" banner. In a *scheduled* run
+(no waiter) a captcha is `NeedsAttention` as always, with a reason that says to
+use Run and watch.
+
+**The open question is whether Talon accepts a human solve in the driven
+browser at all.** The live view could not pass an interactive challenge because
+`Page.startScreencast` is a loud CDP signal and `cdpDetected` is then true. A
+watched run is different in the one way that might matter: it is shown over
+**VNC (pixels off the X server), not a screencast**, so during the solve
+Playwright is doing nothing over CDP and the page's automation tells
+(`navigator.webdriver` false, no `Runtime.enable` console leak on Chrome 151 -
+both measured) are quiet. So it is a real shot where the live view was not - but
+it is unproven, and if Talon still refuses the driven browser the reliable
+fallback is finishing the checkout in the **un-driven** window (no CDP at all,
+the same browser that already passes the sign-in challenge). Not built yet;
+build it only if a watched solve is shown to fail.
+
 **The checkout is the live-fix surface.** `adapters/epic.PLACE_ORDER` (and
 AGREEMENT, CONFIRMED, OWNED) are a deliberately long list of selectors because
 Epic renames the order button constantly; when a claim stops with "could not

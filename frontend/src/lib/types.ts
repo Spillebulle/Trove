@@ -46,6 +46,8 @@ export interface Account {
   last_run_at: string | null
   next_run_at: string | null
   has_totp: boolean
+  /** A watched run is paused on a captcha, waiting for you on the screen. */
+  waiting_for_captcha: boolean
   /** The stored sign-in email, if any; the password only as a yes/no. */
   login_email: string | null
   has_login_password: boolean

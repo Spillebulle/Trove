@@ -42,7 +42,7 @@ import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
 from ..browser import NeedsAttention, screenshot, screenshot_name
-from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
+from .base import BaseAdapter, ChallengeWaiter, ClaimResult, FreeOffer, Requirement
 
 logger = logging.getLogger(__name__)
 
@@ -327,7 +327,9 @@ class EpicAdapter(BaseAdapter):
 
     # ── Claiming ─────────────────────────────────────────────────────────
 
-    async def claim(self, page: Page, offer: FreeOffer) -> ClaimResult:
+    async def claim(
+        self, page: Page, offer: FreeOffer, waiter: ChallengeWaiter | None = None
+    ) -> ClaimResult:
         namespace = offer.extra.get("namespace")
         offer_id = offer.extra.get("offer_id")
         if not namespace or not offer_id:
@@ -346,7 +348,7 @@ class EpicAdapter(BaseAdapter):
                 await self._shot(page, offer, "checkout-timeout"),
             ) from None
 
-        await self._guard(page, offer)
+        await self._guard(page, offer, waiter)
 
         if await _first_visible(page, OWNED, timeout_ms=2000):
             return ClaimResult(
@@ -378,21 +380,21 @@ class EpicAdapter(BaseAdapter):
             )
 
         logger.info("Epic checkout: clicking the order button.")
-        await order.click()
+        await self._click_through(page, offer, order, PLACE_ORDER, waiter)
 
         # One agreement click, if Epic asks. Not a loop: if it asks twice,
         # something is wrong and a person should look at it.
         agree = await _first_visible(page, AGREEMENT, timeout_ms=4000)
         if agree is not None:
-            await agree.click()
+            await self._click_through(page, offer, agree, AGREEMENT, waiter)
             confirm = await _first_visible(page, PLACE_ORDER, timeout_ms=3000)
             if confirm is not None:
-                await confirm.click()
+                await self._click_through(page, offer, confirm, PLACE_ORDER, waiter)
 
         # The order was placed and now the page has to say what happened. This
         # is the one long wait in the flow, because a zero-price order still
         # goes through Epic's payment pipeline.
-        await self._guard(page, offer)
+        await self._guard(page, offer, waiter)
         logger.info("Epic checkout: order placed, waiting for confirmation.")
         if await _first_visible(page, CONFIRMED, timeout_ms=20000):
             logger.info("Epic checkout: confirmed %r.", offer.title)
@@ -424,25 +426,93 @@ class EpicAdapter(BaseAdapter):
 
     # ── Shared ───────────────────────────────────────────────────────────
 
-    async def _guard(self, page: Page, offer: FreeOffer) -> None:
+    async def _guard(
+        self, page: Page, offer: FreeOffer, waiter: ChallengeWaiter | None = None
+    ) -> None:
         """Stop on anything only a person can answer.
 
         Called before and after the order click, because Epic can raise a
         challenge at either point. This is the whole of the app's captcha
-        strategy: notice it, stop, and ask.
+        strategy: notice it, and either wait for a person to solve it on the
+        screen (a watched run, ``waiter`` given) or stop and ask (a scheduled
+        run). Trove never solves it.
         """
         if await _first_visible(page, CHALLENGE, timeout_ms=1200):
-            raise NeedsAttention(
-                "Epic is asking for a captcha or a verification. Open the live "
-                "view and answer it, then Trove can carry on.",
-                await self._shot(page, offer, "challenge"),
-            )
+            await self._handle_challenge(page, offer, waiter)
         if await _first_visible(page, SIGNED_OUT, timeout_ms=1000):
             raise NeedsAttention(
                 "This account is signed out of Epic. Sign in again in the live "
                 "view.",
                 await self._shot(page, offer, "signed-out"),
             )
+
+    async def _handle_challenge(
+        self, page: Page, offer: FreeOffer, waiter: ChallengeWaiter | None
+    ) -> None:
+        """A captcha is up. Wait for the person to solve it, or stop.
+
+        Trove does not and will not solve a captcha: it is against the store's
+        terms, it is exactly what bot detection is built to catch, and a
+        solved-by-a-robot captcha is the fastest route to a locked account. So
+        in a watched run the person solves it on the screen and this waits for
+        that; in a scheduled run it stops and asks for a watched run.
+        """
+        if waiter is None:
+            raise NeedsAttention(
+                "Epic is asking for a captcha at checkout, and Trove never "
+                "solves these itself. Press \"Run and watch\" and answer it on "
+                "the screen \u2014 the claim carries on the moment it clears.",
+                await self._shot(page, offer, "challenge"),
+            )
+        logger.info("Epic checkout: a captcha is up; waiting for it to be solved.")
+
+        async def _cleared() -> bool:
+            return await _first_visible(page, CHALLENGE, timeout_ms=600) is None
+
+        await waiter.wait(_cleared)
+
+    async def _click_through(
+        self,
+        page: Page,
+        offer: FreeOffer,
+        locator,
+        selectors: list[str],
+        waiter: ChallengeWaiter | None,
+    ) -> None:
+        """Click, answering a captcha that pops up on top rather than hammering.
+
+        Epic's Talon can raise an hCaptcha the instant the checkout button is
+        pressed, and its iframe then covers the button - which is why the naive
+        click looped for forty-five seconds and died with a raw timeout. Here a
+        blocked click is read for what it is: if a challenge is on the page it is
+        handed to ``_handle_challenge`` (the person solves it on the screen),
+        and the button - which may have moved or been replaced - is found again
+        and clicked. If nothing is covering it, the block is a real fault worth
+        stopping on.
+        """
+        for _ in range(4):
+            try:
+                await locator.click(timeout=6000)
+                return
+            except PlaywrightTimeout:
+                if await _first_visible(page, CHALLENGE, timeout_ms=800):
+                    await self._handle_challenge(page, offer, waiter)
+                    relocated = await _first_visible(page, selectors, timeout_ms=8000)
+                    if relocated is None:
+                        # The button is gone: the order most likely went through
+                        # while the challenge was being solved.
+                        return
+                    locator = relocated
+                    continue
+                raise NeedsAttention(
+                    "The checkout button could not be clicked - something is "
+                    "covering it. Run and watch to see what.",
+                    await self._shot(page, offer, "click-blocked"),
+                )
+        raise NeedsAttention(
+            "The checkout button stayed blocked after several tries.",
+            await self._shot(page, offer, "click-blocked"),
+        )
 
     async def _shot(self, page: Page, offer: FreeOffer, tag: str) -> str | None:
         account_id = int(offer.extra.get("account_id") or 0)

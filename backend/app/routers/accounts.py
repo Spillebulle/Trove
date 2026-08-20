@@ -23,7 +23,7 @@ from ..config import get_settings
 from ..crypto import decrypt, encrypt, totp_code
 from ..db import get_db
 from ..models import Account, Claim
-from ..runner import check_session, release_watch, run_account
+from ..runner import check_session, is_awaiting_captcha, release_watch, run_account
 from ..schemas import AccountCreate, AccountRead, AccountUpdate, TypeRequest
 from ..timeutil import utcnow
 
@@ -54,6 +54,7 @@ def serialise(db: Session, account: Account) -> AccountRead:
         last_run_at=account.last_run_at,
         next_run_at=account.next_run_at,
         has_totp=bool(account.totp_secret),
+        waiting_for_captcha=is_awaiting_captcha(account.id),
         login_email=decrypt(account.login_email) if account.login_email else None,
         has_login_password=bool(account.login_password),
         notes=account.notes,

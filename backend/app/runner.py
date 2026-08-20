@@ -95,6 +95,60 @@ def is_watch_holding(account_id: int) -> bool:
     return account_id in _watch_release
 
 
+# How long a watched run will wait for a person to solve a captcha on the screen
+# before it gives up. Long, because reading nine blurry forklifts takes a while.
+CAPTCHA_WAIT_MAX_S = 300.0
+
+# Accounts whose watched run is paused on a captcha right now, so a UI can say
+# "solve it on the screen" rather than leave a spinner unexplained.
+_awaiting_captcha: set[int] = set()
+
+
+def is_awaiting_captcha(account_id: int) -> bool:
+    return account_id in _awaiting_captcha
+
+
+class _CaptchaWaiter:
+    """Holds a watched claim while the person solves a captcha on the screen.
+
+    The adapter calls ``wait`` with a check for its own challenge being gone;
+    this blocks - the browser stays open on the screen the whole time - until it
+    clears (resume), the person presses Done (stop), or the cap passes. It is
+    the runner's half of the adapter's ``ChallengeWaiter`` protocol: the store
+    knows how to see its captcha, the runner knows how to wait and what state a
+    page should show.
+    """
+
+    def __init__(self, account_id: int) -> None:
+        self.account_id = account_id
+
+    async def wait(self, is_cleared) -> None:
+        aid = self.account_id
+        _awaiting_captcha.add(aid)
+        logger.info("Account %s: paused on a captcha; waiting for it on the screen.", aid)
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + CAPTCHA_WAIT_MAX_S
+        try:
+            while loop.time() < deadline:
+                if await is_cleared():
+                    logger.info("Account %s: captcha cleared; resuming the claim.", aid)
+                    return
+                if aid in _watch_stop:
+                    raise NeedsAttention(
+                        "The captcha was not solved - you closed the watch. It "
+                        "is still there for next time."
+                    )
+                await asyncio.sleep(2)
+        finally:
+            _awaiting_captcha.discard(aid)
+        # Do not then hold the browser open a second time for the full cap.
+        _watch_stop.add(aid)
+        raise NeedsAttention(
+            "A captcha appeared at checkout and was not solved in time. Press "
+            "Run and watch to solve it on the screen, and the claim continues."
+        )
+
+
 async def _hold_open_for_watch(account_id: int) -> None:
     """Keep the browser open until the watcher presses Done or the cap passes.
 
@@ -384,7 +438,8 @@ async def _do_run(
     ) as context:
         page = await first_page(context)
         try:
-            await _run_claims(db, account, run, adapter, page, pending)
+            waiter = _CaptchaWaiter(account.id) if watch else None
+            await _run_claims(db, account, run, adapter, page, pending, waiter)
         finally:
             # In watch mode the browser stays on the screen until the person
             # presses Done, whatever the run came to - so a checkout that fails
@@ -394,7 +449,7 @@ async def _do_run(
                 await _hold_open_for_watch(account.id)
 
 
-async def _run_claims(db, account, run, adapter, page, pending) -> None:
+async def _run_claims(db, account, run, adapter, page, pending, waiter=None) -> None:
     """Health-check the session, then attempt each pending offer."""
     store = account.store
 

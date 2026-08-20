@@ -31,8 +31,23 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Awaitable, Callable, Protocol
 
 from playwright.async_api import Page
+
+
+class ChallengeWaiter(Protocol):
+    """How a watched run waits out a captcha the person solves on the screen.
+
+    `wait` is handed a coroutine that returns True once the challenge is gone;
+    it blocks - keeping the browser open on the screen - until that happens,
+    the person gives up, or a cap passes, raising `NeedsAttention` in the last
+    two cases. The adapter owns *detecting* its own challenge; the runner owns
+    the *waiting* and the state a UI reads. This keeps store selectors out of
+    the runner and run state out of the adapter.
+    """
+
+    async def wait(self, is_cleared: Callable[[], Awaitable[bool]]) -> None: ...
 
 
 @dataclass(slots=True)
@@ -141,5 +156,14 @@ class BaseAdapter(ABC):
         """
 
     @abstractmethod
-    async def claim(self, page: Page, offer: FreeOffer) -> ClaimResult:
-        """One attempt. Raises `NeedsAttention` when only a person can go on."""
+    async def claim(
+        self, page: Page, offer: FreeOffer, waiter: "ChallengeWaiter | None" = None
+    ) -> ClaimResult:
+        """One attempt. Raises `NeedsAttention` when only a person can go on.
+
+        `waiter`, when given, is how a *watched* run answers a captcha: instead
+        of stopping, the adapter calls `await waiter.wait(is_cleared)` and the
+        person solves the challenge on the screen, then the claim carries on.
+        With no waiter (a scheduled run), a captcha is `NeedsAttention` as
+        always - Trove never solves one itself.
+        """
