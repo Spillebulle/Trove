@@ -150,10 +150,21 @@ COMPAT_CONTINUE = [
 
 # Epic asks for agreement to a refund policy or an end user licence before the
 # order goes through. It is one click and it is not a challenge.
-AGREEMENT = [
+# The consent buttons Epic puts up mid-checkout: the "Right of Withdrawal"
+# dialog ("I accept"), an EULA ("I Agree"), a refund notice ("Accept"). Verified
+# Aug 2026: a free claim shows the Right of Withdrawal dialog after "Add to
+# library" (and after the captcha, when there is one), and the order only goes
+# through once it is accepted. Dialog-scoped variants lead so the click lands on
+# "I accept" and never on the "Cancel" beside it. "Accept" is a substring, so it
+# also catches "I accept".
+ACCEPT = [
+    'div[role="dialog"] button:has-text("I accept")',
+    'div[role="dialog"] button:has-text("I Accept")',
+    'div[role="dialog"] button:has-text("Accept")',
+    'div[role="dialog"] button:has-text("I Agree")',
+    'button:has-text("I accept")',
     'button:has-text("I Agree")',
     'button:has-text("Accept")',
-    'label:has-text("I have read")',
 ]
 
 # The order went through.
@@ -360,54 +371,23 @@ class EpicAdapter(BaseAdapter):
                 detail="Epic will not sell this to your account, usually a region limit.",
             )
 
-        # A device-compatibility "Continue" can sit in front of the button on
-        # some titles; step past it if it is there. Best-effort and quick, so a
-        # game that never shows one (the common case) is not slowed.
-        compat = await _first_visible(page, COMPAT_CONTINUE, timeout_ms=1000)
-        if compat is not None:
-            logger.info("Epic checkout: dismissing a device-compatibility notice.")
-            await compat.click()
+        # Drive the checkout: click whatever it puts up next - Add to library,
+        # then the Right of Withdrawal / EULA "I accept", a device-compat
+        # "Continue" - until it confirms. A step-loop rather than a fixed
+        # order, because Epic interleaves these differently per title and a
+        # captcha can land between any two of them.
+        outcome = await self._drive_checkout(page, offer, waiter)
+        if outcome is not None:
+            detail = {
+                "claimed": "Added to your library.",
+                "already_owned": "Already in your library.",
+                "not_eligible": "Epic will not sell this to your account, usually a region limit.",
+            }[outcome]
+            return ClaimResult(outcome=outcome, detail=detail)
 
-        logger.info("Epic checkout: looking for the order button for %r.", offer.title)
-        order = await _first_visible(page, PLACE_ORDER, timeout_ms=10000)
-        if order is None:
-            raise NeedsAttention(
-                "Could not find the button that adds the game to your library. "
-                "Epic has probably changed the checkout. Run this with "
-                "\"Run and watch\" to see the page, then the button's label "
-                "goes in PLACE_ORDER.",
-                await self._shot(page, offer, "no-order-button"),
-            )
-
-        logger.info("Epic checkout: clicking the order button.")
-        await self._click_through(page, offer, order, PLACE_ORDER, waiter)
-
-        # One agreement click, if Epic asks. Not a loop: if it asks twice,
-        # something is wrong and a person should look at it.
-        agree = await _first_visible(page, AGREEMENT, timeout_ms=4000)
-        if agree is not None:
-            await self._click_through(page, offer, agree, AGREEMENT, waiter)
-            confirm = await _first_visible(page, PLACE_ORDER, timeout_ms=3000)
-            if confirm is not None:
-                await self._click_through(page, offer, confirm, PLACE_ORDER, waiter)
-
-        # The order was placed and now the page has to say what happened. This
-        # is the one long wait in the flow, because a zero-price order still
-        # goes through Epic's payment pipeline.
-        await self._guard(page, offer, waiter)
-        logger.info("Epic checkout: order placed, waiting for confirmation.")
-        if await _first_visible(page, CONFIRMED, timeout_ms=20000):
-            logger.info("Epic checkout: confirmed %r.", offer.title)
-            return ClaimResult(outcome="claimed", detail="Added to your library.")
-        if await _first_visible(page, OWNED, timeout_ms=2000):
-            return ClaimResult(
-                outcome="already_owned", detail="Already in your library."
-            )
-
-        # The confirmation banner's wording changes and a missing one is not
-        # proof of failure - ownership is. Ask the product page directly: if the
-        # account now owns it, the "Add to library" click worked whatever the
-        # overlay said. This is the ground truth the banner only hints at.
+        # No banner is not proof of failure - ownership is. Ask the product page
+        # directly: if the account now owns it, the checkout worked whatever the
+        # overlay said.
         if offer.url:
             logger.info("Epic checkout: no banner; checking the library directly.")
             try:
@@ -471,48 +451,96 @@ class EpicAdapter(BaseAdapter):
 
         await waiter.wait(_cleared)
 
-    async def _click_through(
-        self,
-        page: Page,
-        offer: FreeOffer,
-        locator,
-        selectors: list[str],
-        waiter: ChallengeWaiter | None,
-    ) -> None:
-        """Click, answering a captcha that pops up on top rather than hammering.
+    # The order the checkout is driven in: a mid-checkout consent dialog is
+    # answered before the underlying order button is touched again, and a
+    # device notice before the order button. `PLACE_ORDER` last, so once the
+    # game is added the loop moves on to the dialog rather than re-clicking it.
+    _CHECKOUT_STEPS = (
+        ("accept", "ACCEPT"),
+        ("continue", "COMPAT_CONTINUE"),
+        ("order", "PLACE_ORDER"),
+    )
 
-        Epic's Talon can raise an hCaptcha the instant the checkout button is
-        pressed, and its iframe then covers the button - which is why the naive
-        click looped for forty-five seconds and died with a raw timeout. Here a
-        blocked click is read for what it is: if a challenge is on the page it is
-        handed to ``_handle_challenge`` (the person solves it on the screen),
-        and the button - which may have moved or been replaced - is found again
-        and clicked. If nothing is covering it, the block is a real fault worth
-        stopping on.
+    async def _drive_checkout(self, page: Page, offer: FreeOffer, waiter) -> str | None:
+        """Click through the checkout until it confirms. Returns an outcome or None.
+
+        Each turn: stop on a captcha or a sign-out (via `_guard`), return early
+        if the page already says confirmed / owned / not-eligible, otherwise
+        click the highest-priority thing on the page (a consent dialog first,
+        then a device notice, then the add-to-library button) and go round
+        again. Bounded, so a checkout that never resolves stops rather than
+        spins. None means "clicked things but saw no confirmation" - the caller
+        then checks the library directly.
         """
-        for _ in range(4):
-            try:
-                await locator.click(timeout=6000)
-                return
-            except PlaywrightTimeout:
-                if await _first_visible(page, CHALLENGE, timeout_ms=800):
-                    await self._handle_challenge(page, offer, waiter)
-                    relocated = await _first_visible(page, selectors, timeout_ms=8000)
-                    if relocated is None:
-                        # The button is gone: the order most likely went through
-                        # while the challenge was being solved.
-                        return
-                    locator = relocated
-                    continue
-                raise NeedsAttention(
-                    "The checkout button could not be clicked - something is "
-                    "covering it. Run and watch to see what.",
-                    await self._shot(page, offer, "click-blocked"),
-                )
-        raise NeedsAttention(
-            "The checkout button stayed blocked after several tries.",
-            await self._shot(page, offer, "click-blocked"),
-        )
+        steps = {
+            "accept": ACCEPT,
+            "continue": COMPAT_CONTINUE,
+            "order": PLACE_ORDER,
+        }
+        clicked = 0
+        for _ in range(12):
+            await self._guard(page, offer, waiter)
+            if await _first_visible(page, CONFIRMED, timeout_ms=1200):
+                logger.info("Epic checkout: confirmed %r.", offer.title)
+                return "claimed"
+            if await _first_visible(page, OWNED, timeout_ms=700):
+                return "already_owned"
+            if await _first_visible(page, NOT_ELIGIBLE, timeout_ms=500):
+                return "not_eligible"
+
+            target = None
+            for kind, _name in self._CHECKOUT_STEPS:
+                loc = await _first_visible(page, steps[kind], timeout_ms=700)
+                if loc is not None:
+                    target = loc
+                    logger.info("Epic checkout: clicking the %s button.", kind)
+                    break
+
+            if target is None:
+                if clicked == 0:
+                    raise NeedsAttention(
+                        "Could not find the button that adds the game to your "
+                        "library. Epic has probably changed the checkout. Run "
+                        "this with \"Run and watch\" to see the page, then the "
+                        "button's label goes in PLACE_ORDER or ACCEPT.",
+                        await self._shot(page, offer, "no-order-button"),
+                    )
+                # Something was clicked; give the confirmation a last long look.
+                if await _first_visible(page, CONFIRMED, timeout_ms=8000):
+                    logger.info("Epic checkout: confirmed %r.", offer.title)
+                    return "claimed"
+                return None
+
+            if await self._click(page, offer, target, waiter):
+                clicked += 1
+                await page.wait_for_timeout(1000)
+            # If the click did not land (a captcha was handled instead), just
+            # loop and re-read the page - what is actionable has changed.
+        return None
+
+    async def _click(self, page: Page, offer: FreeOffer, locator, waiter) -> bool:
+        """Click once, answering a captcha rather than hammering. True if it landed.
+
+        Epic's Talon can raise an hCaptcha the instant a checkout button is
+        pressed, and its iframe then covers the button - which is why the naive
+        click looped for forty-five seconds and died with a raw timeout. A
+        blocked click is read for what it is: if a challenge is on the page it is
+        handed to `_handle_challenge` (the person solves it on the screen) and
+        this returns False so the caller re-reads the page; if nothing is
+        covering it, the block is a real fault worth stopping on.
+        """
+        try:
+            await locator.click(timeout=5000)
+            return True
+        except PlaywrightTimeout:
+            if await _first_visible(page, CHALLENGE, timeout_ms=800):
+                await self._handle_challenge(page, offer, waiter)
+                return False
+            raise NeedsAttention(
+                "A checkout button could not be clicked - something is covering "
+                "it. Run and watch to see what.",
+                await self._shot(page, offer, "click-blocked"),
+            )
 
     async def _shot(self, page: Page, offer: FreeOffer, tag: str) -> str | None:
         account_id = int(offer.extra.get("account_id") or 0)

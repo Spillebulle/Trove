@@ -371,6 +371,8 @@ fallback is finishing the checkout in the **un-driven** window (no CDP at all,
 the same browser that already passes the sign-in challenge). Not built yet;
 build it only if a watched solve is shown to fail.
 
+**The checkout is a step-loop (`epic._drive_checkout`).** Epic interleaves the checkout steps differently per title and a captcha can land between any two, so rather than a fixed order→agree→confirm sequence it clicks whatever is on the page next, in priority order: a consent dialog (`ACCEPT` - the "Right of Withdrawal" / EULA "I accept", verified Aug 2026 to appear after Add to library and after the captcha), then a device "Continue", then the `PLACE_ORDER` add-to-library button, until it sees `CONFIRMED`/`OWNED`. `ACCEPT` leads so a dialog is answered rather than the order button re-clicked behind it, and its dialog-scoped selectors land on "I accept" and never the "Cancel" beside it. Simulated through the order→withdrawal→confirmed sequence; the real end-to-end claim is still to be confirmed.
+
 **The checkout is the live-fix surface.** `adapters/epic.PLACE_ORDER` (and
 AGREEMENT, CONFIRMED, OWNED) are a deliberately long list of selectors because
 Epic renames the order button constantly; when a claim stops with "could not
