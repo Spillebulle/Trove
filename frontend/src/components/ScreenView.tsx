@@ -19,11 +19,12 @@
  * bridged to the VNC port inside the container, so nothing but a signed-in
  * Trove user can ever see a store session.
  */
-import { useEffect, useRef, useState } from 'react'
-import { ClipboardPaste } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, ClipboardPaste } from 'lucide-react'
 import RFB from '@novnc/novnc'
 import { screenSocketUrl } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
+import { cn } from '@/lib/utils'
 import { Spinner } from './ui'
 
 type Phase = 'connecting' | 'live' | 'closed' | 'error'
@@ -43,6 +44,24 @@ export function ScreenView({
   const [phase, setPhase] = useState<Phase>('connecting')
   const [message, setMessage] = useState<string | null>(null)
   const { push } = useToast()
+
+  // The status line can carry a long error (a checkout that failed with a wall
+  // of Playwright log). Clamp it to two lines above the preview so it never
+  // shrinks the picture, and let it be expanded when someone wants the whole
+  // thing. `overflowing` decides whether the toggle is worth showing.
+  const statusRef = useRef<HTMLParagraphElement>(null)
+  const [statusExpanded, setStatusExpanded] = useState(false)
+  const [statusOverflowing, setStatusOverflowing] = useState(false)
+  useLayoutEffect(() => {
+    setStatusExpanded(false)
+  }, [status])
+  useLayoutEffect(() => {
+    const el = statusRef.current
+    if (!el) return
+    // Measured while clamped: if the text is taller than its two-line box, the
+    // "Show more" is worth offering.
+    if (!statusExpanded) setStatusOverflowing(el.scrollHeight > el.clientHeight + 1)
+  }, [status, statusExpanded])
 
   // Hand the browser on the other side what is on this clipboard, so a
   // password from a manager can be pasted there with Ctrl+V rather than typed
@@ -114,9 +133,36 @@ export function ScreenView({
   return (
     <div className="flex h-full flex-col gap-3">
       {status && phase === 'live' && (
-        <div className="flex items-center gap-2 rounded-control border border-line-soft bg-raised px-3 py-2 text-small text-fg">
-          <Spinner />
-          <span className="min-w-0">{status}</span>
+        <div className="flex shrink-0 items-start gap-2 rounded-control border border-line-soft bg-raised px-3 py-2 text-small text-fg">
+          <Spinner className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p
+              ref={statusRef}
+              className={cn(
+                'whitespace-pre-wrap break-words',
+                statusExpanded ? 'max-h-32 overflow-y-auto' : 'line-clamp-2',
+              )}
+            >
+              {status}
+            </p>
+            {(statusOverflowing || statusExpanded) && (
+              <button
+                type="button"
+                onClick={() => setStatusExpanded((v) => !v)}
+                className="mt-1 inline-flex items-center gap-1 text-tiny text-dim hover:text-fg"
+              >
+                {statusExpanded ? (
+                  <>
+                    <ChevronUp size={12} /> Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={12} /> Show more
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
       )}
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-control bg-sunk">

@@ -119,13 +119,31 @@ class _CaptchaWaiter:
     page should show.
     """
 
-    def __init__(self, account_id: int) -> None:
+    def __init__(self, account_id: int, label: str, store_name: str) -> None:
         self.account_id = account_id
+        self.label = label
+        self.store_name = store_name
 
     async def wait(self, is_cleared) -> None:
         aid = self.account_id
         _awaiting_captcha.add(aid)
         logger.info("Account %s: paused on a captcha; waiting for it on the screen.", aid)
+        # Ping once, so someone who started the watch and walked away knows to
+        # come back. It respects the same "on attention" switch as every other
+        # nudge; a webhook is enough, no bot needed to *send*.
+        notify.send_soon(
+            "attention",
+            notify.Notification(
+                title=f"{self.label}: a captcha needs you",
+                detail=(
+                    f"{self.store_name} put up a captcha at the checkout. Open "
+                    "Trove, watch this account, and solve it on the screen - the "
+                    "claim finishes on its own the moment it clears."
+                ),
+                severity="caution",
+                context=self.store_name,
+            ),
+        )
         loop = asyncio.get_event_loop()
         deadline = loop.time() + CAPTCHA_WAIT_MAX_S
         try:
@@ -438,7 +456,11 @@ async def _do_run(
     ) as context:
         page = await first_page(context)
         try:
-            waiter = _CaptchaWaiter(account.id) if watch else None
+            waiter = (
+                _CaptchaWaiter(account.id, account.label, adapter.display_name)
+                if watch
+                else None
+            )
             await _run_claims(db, account, run, adapter, page, pending, waiter)
         finally:
             # In watch mode the browser stays on the screen until the person

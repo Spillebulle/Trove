@@ -354,7 +354,7 @@ than hammered. In a *watched* run it pauses - `runner._CaptchaWaiter`, handed to
 `adapter.claim` as the `ChallengeWaiter` - keeps the browser open on the
 container's screen, and the person solves the hCaptcha there; the moment the
 challenge clears the claim resumes on its own. `waiting_for_captcha` on the
-account read drives the "solve it on the screen" banner. In a *scheduled* run
+account read drives the "solve it on the screen" banner, and a notification goes out when the pause begins so someone who walked away is called back (kind `attention`, so a plain webhook is enough - no bot to *send*). In a *scheduled* run
 (no waiter) a captcha is `NeedsAttention` as always, with a reason that says to
 use Run and watch.
 
