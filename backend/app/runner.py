@@ -124,10 +124,13 @@ class _CaptchaWaiter:
         self.label = label
         self.store_name = store_name
 
-    async def wait(self, is_cleared) -> None:
+    async def wait(self, is_cleared, image_name: str | None = None) -> None:
         aid = self.account_id
         _awaiting_captcha.add(aid)
         logger.info("Account %s: paused on a captcha; waiting for it on the screen.", aid)
+        image_path = (
+            str(settings.screenshots_path / image_name) if image_name else None
+        )
         # Ping once, so someone who started the watch and walked away knows to
         # come back. It respects the same "on attention" switch as every other
         # nudge; a webhook is enough, no bot needed to *send*.
@@ -142,6 +145,7 @@ class _CaptchaWaiter:
                 ),
                 severity="caution",
                 context=self.store_name,
+                image_path=image_path,
             ),
         )
         loop = asyncio.get_event_loop()
@@ -346,8 +350,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
         run_id = run.id
         started = utcnow()
 
-        if watch:
-            begin_watch(account.id)
+        begin_watch(account.id)
         try:
             await _do_run(db, account, run, profile_path, watch=watch)
         except ProfileBusy as exc:
@@ -456,11 +459,10 @@ async def _do_run(
     ) as context:
         page = await first_page(context)
         try:
-            waiter = (
-                _CaptchaWaiter(account.id, account.label, adapter.display_name)
-                if watch
-                else None
-            )
+            # A waiter for every run - watched or not - so a captcha pauses
+            # the run and can be solved by jumping into it on the screen,
+            # rather than failing and needing the whole run again.
+            waiter = _CaptchaWaiter(account.id, account.label, adapter.display_name)
             await _run_claims(db, account, run, adapter, page, pending, waiter)
         finally:
             # In watch mode the browser stays on the screen until the person

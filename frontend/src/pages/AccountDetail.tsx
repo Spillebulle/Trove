@@ -18,6 +18,7 @@ import {
   OUTCOME_TONE,
   RUN_STATUS_LABEL,
   RUN_STATUS_TONE,
+  cn,
   duration,
   everyHours,
   fullTime,
@@ -53,6 +54,9 @@ export function AccountDetail() {
   const [signInStep, setSignInStep] = useState<string | null>(null)
   // Watching a run on the container's screen.
   const [watchOpen, setWatchOpen] = useState(false)
+  // Observing = jumped into a run someone else (the scheduler, Run now) started,
+  // rather than owning a Run-and-watch. Closing an observed run must not stop it.
+  const [watchObserving, setWatchObserving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
@@ -110,8 +114,23 @@ export function AccountDetail() {
     onError: (error: Error) => push(error.message, 'critical'),
   })
   const startWatchedRun = () => {
+    setWatchObserving(false)
     setWatchOpen(true)
     runWatch.mutate()
+  }
+  // Jump into the run already in progress - to watch it, or to solve a captcha
+  // it is paused on - without starting another.
+  const watchCurrentRun = () => {
+    setWatchObserving(true)
+    setWatchOpen(true)
+  }
+  const closeWatch = () => {
+    // Only release the run if this window owns it. An observed run keeps going
+    // (and keeps waiting for its captcha) after you stop looking.
+    if (!watchObserving) stopWatch.mutate()
+    setWatchOpen(false)
+    setWatchObserving(false)
+    refresh()
   }
 
   const clearAttention = useMutation({
@@ -295,7 +314,17 @@ export function AccountDetail() {
       {activity && (
         <div className="mb-4 flex items-center gap-2 rounded-control border border-line-soft bg-raised px-4 py-2.5 text-body text-fg">
           <Spinner />
-          {activity}
+          <span className="min-w-0 flex-1">{activity}</span>
+          {data.busy_with === 'a claim run' && screenInfo.data?.ok && (
+            <button
+              type="button"
+              className={cn('btn-secondary shrink-0', data.waiting_for_captcha && 'btn-primary')}
+              onClick={watchCurrentRun}
+            >
+              <Eye className="size-icon" />
+              {data.waiting_for_captcha ? 'Solve the captcha' : 'Watch'}
+            </button>
+          )}
         </div>
       )}
       <PageHeader
@@ -363,7 +392,18 @@ export function AccountDetail() {
               <Monitor className="size-icon" />
               Live view
             </button>
-            {localSignIn.data?.via === 'screen' && screenInfo.data?.ok && (
+            {data.busy_with === 'a claim run' && screenInfo.data?.ok && (
+              <button
+                type="button"
+                className={cn('btn-secondary', data.waiting_for_captcha && 'btn-primary')}
+                onClick={watchCurrentRun}
+                title="Jump into the run in progress and watch it on Trove’s screen - and solve a captcha if it is waiting on one."
+              >
+                <Eye className="size-icon" />
+                {data.waiting_for_captcha ? 'Solve the captcha' : 'Watch'}
+              </button>
+            )}
+            {data.busy_with !== 'a claim run' && localSignIn.data?.via === 'screen' && screenInfo.data?.ok && (
               <button
                 type="button"
                 className="btn-secondary"
@@ -795,7 +835,7 @@ export function AccountDetail() {
           </a>
         }
       >
-        <div className="h-[60vh] min-h-[380px]">
+        <div className="h-[74vh] min-h-[420px]">
           {liveOpen && (
             <LiveBrowser
               accountId={accountId}
@@ -825,7 +865,7 @@ export function AccountDetail() {
         subtitle="A normal browser window, opened inside the container with nothing attached to it."
         size="large"
       >
-        <div className="h-[60vh] min-h-[380px]">
+        <div className="h-[74vh] min-h-[420px]">
           {screenOpen && (
             <ScreenView
               status={signInStep}
@@ -928,16 +968,16 @@ export function AccountDetail() {
        */}
       <Dialog
         open={watchOpen}
-        onClose={() => {
-          stopWatch.mutate()
-          setWatchOpen(false)
-          refresh()
-        }}
+        onClose={closeWatch}
         title={`Watching ${data.label}`}
-        subtitle="The run, live on Trove’s screen. It opens the store, checks you are signed in, then tries the checkout."
+        subtitle={
+          watchObserving
+            ? 'The run in progress, live on Trove’s screen. If it is waiting on a captcha, solve it here and it carries on.'
+            : 'The run, live on Trove’s screen. It opens the store, checks you are signed in, then tries the checkout.'
+        }
         size="large"
       >
-        <div className="h-[60vh] min-h-[380px]">
+        <div className="h-[74vh] min-h-[420px]">
           {watchOpen && (
             <ScreenView
               status={
@@ -946,25 +986,15 @@ export function AccountDetail() {
                   : data.status === 'needs_attention'
                     ? (data.status_reason ?? 'The run stopped and needs a hand.')
                     : data.busy_with === 'a claim run'
-                      ? 'Running… the browser is held open here until you press Done.'
+                      ? watchObserving
+                        ? 'Watching the run in progress.'
+                        : 'Running… the browser is held open here until you press Done.'
                       : 'Starting the run…'
               }
-              onClose={() => {
-                stopWatch.mutate()
-                setWatchOpen(false)
-                refresh()
-              }}
+              onClose={closeWatch}
               footer={
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    stopWatch.mutate()
-                    setWatchOpen(false)
-                    refresh()
-                  }}
-                >
-                  Done
+                <button type="button" className="btn-secondary" onClick={closeWatch}>
+                  {watchObserving ? 'Close' : 'Done'}
                 </button>
               }
             />

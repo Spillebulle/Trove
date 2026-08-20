@@ -348,15 +348,21 @@ not lost. Outside watch mode none of this runs.
 image hCaptcha the instant "Add to library" is pressed, and its iframe covers
 the button - which made the naive click loop for 45 s and die with a raw
 `TimeoutError`. The rule is unchanged and absolute: **Trove never solves a
-captcha.** What it does now: the checkout click is captcha-aware
-(`epic._click_through`), so a blocked click is recognised as a challenge rather
-than hammered. In a *watched* run it pauses - `runner._CaptchaWaiter`, handed to
-`adapter.claim` as the `ChallengeWaiter` - keeps the browser open on the
-container's screen, and the person solves the hCaptcha there; the moment the
-challenge clears the claim resumes on its own. `waiting_for_captcha` on the
-account read drives the "solve it on the screen" banner, and a notification goes out when the pause begins so someone who walked away is called back (kind `attention`, so a plain webhook is enough - no bot to *send*). In a *scheduled* run
-(no waiter) a captcha is `NeedsAttention` as always, with a reason that says to
-use Run and watch.
+captcha.** What it does now: the checkout click is captcha-aware (`epic._click`), so a
+blocked click is recognised as a challenge rather than hammered. **Every run -
+watched or scheduled - gets a `runner._CaptchaWaiter`** (handed to
+`adapter.claim` as the `ChallengeWaiter`), so a captcha pauses the run for up to
+`CAPTCHA_WAIT_MAX_S` (5 min) with the browser held open on the container's
+screen rather than failing outright, and the person solves the hCaptcha there;
+the moment it clears the claim resumes on its own. They reach it by **jumping
+into the run in progress** - the account page's "Watch" / "Solve the captcha"
+button opens the screen view on the live run without starting another (observe
+mode: closing it does not stop the run). `waiting_for_captcha` on the account
+read drives that button and the banner, and a notification goes out when the
+pause begins - **with a screenshot of the captcha attached** (`Notification.
+image_path`, uploaded to Discord as a multipart file because Discord fetches
+URLs from its own side and cannot see a local one; context, not a puzzle to
+solve). If nobody comes, the wait times out to `NeedsAttention` as before.
 
 **The open question is whether Talon accepts a human solve in the driven
 browser at all.** The live view could not pass an interactive challenge because

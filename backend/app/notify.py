@@ -17,9 +17,11 @@ summary is a single message rather than one per claim.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -85,6 +87,11 @@ class Notification:
     image_url: str | None = None
     # A smaller image, shown in the corner, when a big one would be too much.
     thumbnail_url: str | None = None
+    # A local image file to *upload* - a screenshot of what stopped the run,
+    # which Discord cannot fetch from a URL because it lives on this machine.
+    # Attached to the message and shown in the embed. For context, never to be
+    # solved: a captcha screenshot is a picture, not a puzzle Trove answers.
+    image_path: str | None = None
 
 
 def _discord_payload(note: Notification) -> dict:
@@ -132,6 +139,7 @@ def _plain_payload(note: Notification) -> dict:
         "context": note.context,
         "url": note.url,
         "image_url": note.image_url,
+        "image_path": note.image_path,
     }
 
 
@@ -144,10 +152,27 @@ async def post(channel: str, webhook_url: str, note: Notification) -> tuple[bool
     """
     if channel == "off" or not webhook_url:
         return False, "No notification channel is configured."
-    payload = _discord_payload(note) if channel == "discord" else _plain_payload(note)
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(webhook_url, json=payload)
+            if channel == "discord":
+                payload = _discord_payload(note)
+                shot = note.image_path
+                if shot and Path(shot).is_file():
+                    # Multipart: the embed points at the file by name, and the
+                    # file rides along in the same request. This is the only way
+                    # a local screenshot reaches Discord - it fetches URLs from
+                    # its own side and cannot see this machine.
+                    name = Path(shot).name
+                    payload["embeds"][0]["image"] = {"url": f"attachment://{name}"}
+                    response = await client.post(
+                        webhook_url,
+                        data={"payload_json": json.dumps(payload)},
+                        files={"files[0]": (name, Path(shot).read_bytes(), "image/png")},
+                    )
+                else:
+                    response = await client.post(webhook_url, json=payload)
+            else:
+                response = await client.post(webhook_url, json=_plain_payload(note))
     except httpx.HTTPError as exc:
         # The URL is deliberately absent from this message. It is a secret, and
         # an error string ends up in the log and in the UI.

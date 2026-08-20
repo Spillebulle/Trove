@@ -47,7 +47,9 @@ class ChallengeWaiter(Protocol):
     the runner and run state out of the adapter.
     """
 
-    async def wait(self, is_cleared: Callable[[], Awaitable[bool]]) -> None: ...
+    async def wait(
+        self, is_cleared: Callable[[], Awaitable[bool]], image_name: str | None = None
+    ) -> None: ...
 
 
 @dataclass(slots=True)

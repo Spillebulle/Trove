@@ -445,11 +445,14 @@ class EpicAdapter(BaseAdapter):
                 await self._shot(page, offer, "challenge"),
             )
         logger.info("Epic checkout: a captcha is up; waiting for it to be solved.")
+        # A screenshot for the notification - context so a person knows what is
+        # waiting, not a puzzle for Trove to solve.
+        shot = await self._shot(page, offer, "captcha")
 
         async def _cleared() -> bool:
             return await _first_visible(page, CHALLENGE, timeout_ms=600) is None
 
-        await waiter.wait(_cleared)
+        await waiter.wait(_cleared, image_name=shot)
 
     # The order the checkout is driven in: a mid-checkout consent dialog is
     # answered before the underlying order button is touched again, and a

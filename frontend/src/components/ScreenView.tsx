@@ -165,9 +165,19 @@ export function ScreenView({
           </div>
         </div>
       )}
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-control bg-sunk">
-        {/* noVNC owns this element: it appends its own canvas and sizes it. */}
-        <div ref={hostRef} className="absolute inset-0" />
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-control bg-sunk"
+        style={{ containerType: 'size' }}
+      >
+        {/* noVNC appends its canvas here. The box is sized to the remote's 16:10
+            so the picture fills it with no letterbox bars, and as large as the
+            dialog allows - the smaller of the full width or the height times
+            1.6. Container-query units make "the height" the box's own height. */}
+        <div
+          ref={hostRef}
+          className="relative overflow-hidden rounded-sm"
+          style={{ aspectRatio: '16 / 10', width: 'min(100cqw, 160cqh)' }}
+        />
 
         {phase === 'connecting' && (
           <div className="absolute inset-0 grid place-items-center">
