@@ -153,3 +153,19 @@ export function everyHours(hours: number): string {
   if (hours % 24 === 0) return `Every ${hours / 24} days`
   return `Every ${hours} hours`
 }
+
+/**
+ * "2 games, 1 add-on" - the claimed count split by what was claimed.
+ *
+ * An add-on is worth counting apart from a game: it is a different kind of
+ * thing to own, and one that only works if the game it belongs to is owned
+ * too. Written out rather than as "2/1", which needs a key to read.
+ */
+export function claimedSplit(total: number, dlc: number): string {
+  const games = Math.max(0, total - dlc)
+  const part = (count: number, one: string, many: string) =>
+    `${count} ${count === 1 ? one : many}`
+  if (!dlc) return part(games, 'game', 'games')
+  if (!games) return part(dlc, 'add-on', 'add-ons')
+  return `${part(games, 'game', 'games')}, ${part(dlc, 'add-on', 'add-ons')}`
+}

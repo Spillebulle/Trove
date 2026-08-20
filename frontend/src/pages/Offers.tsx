@@ -14,7 +14,7 @@ import { Gift, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import { fullTime, relativeTime, timeLeft } from '@/lib/utils'
-import { EmptyState, ErrorState, PageHeader, Spinner } from '@/components/ui'
+import { EmptyState, ErrorState, KindBadge, PageHeader, Spinner } from '@/components/ui'
 
 export function Offers() {
   const queryClient = useQueryClient()
@@ -110,14 +110,12 @@ export function Offers() {
                     {offer.title}
                   </h2>
 
-                  <p className="mt-0.5 flex items-center gap-1.5 text-small text-dim">
+                  <p className="mt-0.5 flex items-center gap-2 text-small text-dim">
                     <span className="capitalize">{offer.store}</span>
-                    {offer.kind !== 'game' && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span>{offer.kind === 'dlc' ? 'Add-on' : 'Key'}</span>
-                      </>
-                    )}
+                    {/* An add-on is worth a badge rather than a word: it is the
+                        one kind that may not be claimable on its own, and the
+                        card should say so at a glance. */}
+                    <KindBadge kind={offer.kind} />
                   </p>
 
                   <p

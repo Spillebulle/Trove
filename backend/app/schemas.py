@@ -119,6 +119,9 @@ class AccountRead(Read):
     # Counts for the account card, so the list page does not need one request
     # per account to say anything useful.
     claimed_count: int
+    # Of those, how many were add-ons rather than games, so the card can say
+    # "one game, one add-on" instead of counting them all as games.
+    claimed_dlc_count: int = 0
     # Who currently has the browser profile open, if anybody.
     busy_with: str | None
 
@@ -155,6 +158,11 @@ class ClaimRead(Read):
     run_id: int | None
     store: str
     title: str
+    # game / dlc / key, copied off the offer so the ledger can badge an add-on
+    # long after the offer row is gone.
+    kind: str = "game"
+    # The poster, copied for the same reason.
+    image_url: str | None = None
     outcome: str
     detail: str | None
     # Whether there is a key to reveal, never the key.

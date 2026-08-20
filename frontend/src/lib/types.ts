@@ -60,6 +60,8 @@ export interface Account {
   notes: string | null
   created_at: string | null
   claimed_count: number
+  /** Of those, how many were add-ons rather than games. */
+  claimed_dlc_count: number
   /** Who has the browser profile open, if anybody. Null means it is free. */
   busy_with: string | null
 }
@@ -88,6 +90,10 @@ export interface Claim {
   run_id: number | null
   store: string
   title: string
+  /** game / dlc / key, copied off the offer so it survives the offer row. */
+  kind: string
+  /** The poster, copied for the same reason. */
+  image_url: string | null
   outcome: ClaimOutcome
   detail: string | null
   /** Whether there is a key to reveal. The key itself is a separate request. */

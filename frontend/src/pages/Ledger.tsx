@@ -22,6 +22,7 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  KindBadge,
   PageHeader,
   Segmented,
   Spinner,
@@ -84,11 +85,33 @@ export function Ledger() {
               <tbody>
                 {(claims.data ?? []).map((claim) => (
                   <tr key={claim.id} className="table-row">
-                    <td className="max-w-[22rem] px-strip py-2">
-                      <span className="block truncate text-strong">{claim.title}</span>
-                      {claim.detail && (
-                        <span className="block truncate text-small text-dim">{claim.detail}</span>
-                      )}
+                    {/*
+                     * The poster earns its place here: a ledger of what you own
+                     * reads as a shelf rather than a log when the artwork is on
+                     * it. Small and fixed-size so the row height does not move,
+                     * and the cell still reads without it - an old row claimed
+                     * before Trove copied posters simply has none.
+                     */}
+                    <td className="max-w-[26rem] px-strip py-2">
+                      <span className="flex items-start gap-3">
+                        {claim.image_url && (
+                          <img
+                            src={claim.image_url}
+                            alt=""
+                            loading="lazy"
+                            className="art mt-0.5 h-10 w-[4.5rem] shrink-0 object-cover"
+                          />
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate text-strong">{claim.title}</span>
+                            <KindBadge kind={claim.kind} />
+                          </span>
+                          {claim.detail && (
+                            <span className="block truncate text-small text-dim" title={claim.detail}>
+                              {claim.detail}
+                            </span>
+                          )}
                       <span className="mt-1 flex flex-wrap items-center gap-2">
                         {claim.has_key && (
                           <button
@@ -110,6 +133,8 @@ export function Ledger() {
                             What Trove saw
                           </a>
                         )}
+                      </span>
+                        </span>
                       </span>
                     </td>
                     <td className="px-strip py-2 text-muted">

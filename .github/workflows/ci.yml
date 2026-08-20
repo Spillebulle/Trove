@@ -74,3 +74,8 @@ jobs:
         env:
           DATA_DIR: ./ci-data
         run: python tools/checkout_sim.py
+
+      - name: DLC prerequisite logic (no browser)
+        env:
+          DATA_DIR: ./ci-data
+        run: python tools/dlc_sim.py

@@ -137,6 +137,8 @@ def _serialise_claim(claim: Claim, label: str | None) -> ClaimRead:
         run_id=claim.run_id,
         store=claim.store,
         title=claim.title,
+        kind=claim.kind or "game",
+        image_url=claim.image_url,
         outcome=claim.outcome,
         detail=claim.detail,
         has_key=bool(claim.key_code),

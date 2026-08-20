@@ -37,13 +37,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
 from ..browser import CheckoutBlocked, NeedsAttention, screenshot, screenshot_name
-from .base import BaseAdapter, ChallengeWaiter, ClaimResult, FreeOffer, Requirement
+from .base import (
+    BaseAdapter,
+    BaseGame,
+    ChallengeWaiter,
+    ClaimResult,
+    FreeOffer,
+    Requirement,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +201,29 @@ NOT_ELIGIBLE = [
     'text=/not available in your region/i',
     'text=/cannot be purchased in your (region|country)/i',
     'text=/this product is not available/i',
+]
+
+# The product page's call to action, which is how a person tells at a glance
+# whether they can have a game: "Get" for a free or free-to-play title, "Buy
+# Now" (or a price) for a paid one, "In Library" once it is owned. Read rather
+# than clicked - this is the DLC prerequisite check, not a purchase.
+PRODUCT_CTA = [
+    '[data-testid="purchase-cta-button"]',
+    'button[data-testid="purchase-cta-button"]',
+    'aside button:has-text("Get")',
+    'aside button:has-text("Buy Now")',
+    'button:has-text("Buy Now")',
+    'button:has-text("Get")',
+]
+
+# A price on the product page, for saying *how* paid a base game is when a DLC
+# is skipped over it. Any currency: the account's country decides the symbol.
+PRODUCT_PRICE = [
+    '[data-testid="purchase-discount-price"]',
+    '[data-component="PriceLayout"]',
+    'span:has-text("$")',
+    'span:has-text("€")',
+    'span:has-text("£")',
 ]
 
 # An error Epic raises while processing the order - the "An error occurred while
@@ -376,6 +407,140 @@ class EpicAdapter(BaseAdapter):
         # the thing that most often means Epic changed something, and reporting
         # it as "signed out" would send the user to sign in to no effect.
         return False, "Could not tell whether this account is signed in."
+
+    async def inspect_base_game(self, page: Page, offer: FreeOffer) -> BaseGame | None:
+        """The game this add-on belongs to: is it owned, and can it be had free?
+
+        A free DLC is only worth claiming if the account owns the game it
+        extends, and Epic gives away add-ons for games it does not give away -
+        the free "Epic Mage Bundle" is for Albion Online. So before spending a
+        checkout on one, ask about the game.
+
+        The relationship comes free with discovery: an add-on shares its
+        namespace with its base game, and `catalogNs.mappings[productHome]` is
+        the base game's page (measured Aug 2026). This loads that page once and
+        reads three things off it, the way a person would:
+
+        * **Owned** - the "In Library" marker, the same one `is_owned` uses.
+        * **Free** - the call to action. "Get" means free or free-to-play; "Buy
+          Now" or a price means paid. That is the store's own summary of the
+          question, rather than a price parsed out of the markup.
+        * **How to claim it** - the offer id, which the page carries in the
+          purchase links it builds. Without it the game can be reported but not
+          bought, which is still worth saying.
+
+        Everything it could not establish stays `None`. A page that has changed
+        shape produces "could not tell", and the runner then skips the DLC with
+        that as the reason rather than claiming into the dark.
+        """
+        base_url = offer.extra.get("base_url")
+        if not base_url:
+            return None
+        try:
+            await _goto(page, base_url)
+        except PlaywrightTimeout:
+            logger.info("Epic: the base game's page (%s) did not load.", base_url)
+            return BaseGame(title="the base game", url=base_url)
+
+        title = None
+        try:
+            title = (await page.title() or "").split("|")[0].strip() or None
+        except Exception:
+            pass
+
+        owned: bool | None = None
+        if await _first_visible(page, OWNED, timeout_ms=3000):
+            owned = True
+
+        cta = await _first_visible(page, PRODUCT_CTA, timeout_ms=4000)
+        cta_text = ""
+        if cta is not None:
+            try:
+                cta_text = " ".join((await cta.inner_text() or "").split())
+            except Exception:
+                cta_text = ""
+        lowered = cta_text.lower()
+
+        free: bool | None = None
+        if "in library" in lowered or "owned" in lowered:
+            owned = True
+        elif "get" in lowered:
+            free = True
+        elif "buy" in lowered or any(sym in cta_text for sym in "$€£¥"):
+            free = False
+
+        price_note = None
+        if free is False:
+            price = await _first_visible(page, PRODUCT_PRICE, timeout_ms=1500)
+            if price is not None:
+                try:
+                    price_note = " ".join((await price.inner_text() or "").split())[:24]
+                except Exception:
+                    pass
+            price_note = price_note or (cta_text[:24] or None)
+
+        base_offer = None
+        offer_id = await self._base_offer_id(page, offer)
+        if offer_id:
+            base_offer = FreeOffer(
+                external_id=f"{offer.extra.get('namespace')}:{offer_id}",
+                title=title or "the base game",
+                url=base_url,
+                kind="game",
+                extra={
+                    "namespace": offer.extra.get("namespace"),
+                    "offer_id": offer_id,
+                    "account_id": offer.extra.get("account_id"),
+                },
+            )
+
+        logger.info(
+            "Epic: %r needs %r - owned=%s free=%s cta=%r claimable=%s.",
+            offer.title, title or base_url, owned, free, cta_text, bool(base_offer),
+        )
+        return BaseGame(
+            title=title or "the base game",
+            url=base_url,
+            owned=owned,
+            free=free,
+            price_note=price_note,
+            offer=base_offer,
+        )
+
+    async def _base_offer_id(self, page: Page, offer: FreeOffer) -> str | None:
+        """The base game's offer id, read off its own product page.
+
+        Epic's public catalog API refuses a plain HTTP client (measured: the
+        store's GraphQL answers 403 to anything that is not a browser), so this
+        is asked of the page that is already open - which is signed in and past
+        Cloudflare, and therefore the one client that can see it. The page
+        builds its own purchase links, and an offer id is 32 hex characters
+        under the same namespace the add-on carries.
+        """
+        namespace = offer.extra.get("namespace")
+        if not namespace:
+            return None
+        try:
+            content = await page.content()
+        except Exception as exc:
+            logger.debug("Could not read the base game's page: %s", exc)
+            return None
+        # A purchase link, which is unambiguous about what the id is for.
+        found = re.search(rf"1-{re.escape(namespace)}-([0-9a-f]{{32}})", content)
+        if found:
+            return found.group(1)
+        # Failing that, an offerId the page carries for its own use. Only
+        # trusted when there is exactly one, so a page listing add-ons as well
+        # as the game cannot hand back the wrong one.
+        ids = set(re.findall(r'"offerId"\s*:\s*"([0-9a-f]{32})"', content))
+        ids.discard(offer.extra.get("offer_id") or "")
+        if len(ids) == 1:
+            return ids.pop()
+        logger.info(
+            "Epic: could not work out how to claim the base game (%d candidate ids).",
+            len(ids),
+        )
+        return None
 
     def checkout_url(self, offer: FreeOffer) -> str | None:
         """The purchase page for one offer, for the un-driven window to finish.
@@ -752,35 +917,82 @@ def _parse_element(element: dict) -> FreeOffer | None:
         starts_at=_parse_date(window.get("startDate")),
         ends_at=_parse_date(window.get("endDate")),
         source="store",
-        extra={"namespace": namespace, "offer_id": offer_id},
+        extra={
+            "namespace": namespace,
+            "offer_id": offer_id,
+            # Only set for an add-on: the page of the game it belongs to, so a
+            # DLC claim can check the prerequisite before spending a checkout on
+            # something the account cannot use.
+            "base_url": _base_game_url(element),
+        },
     )
 
 
-def _product_url(element: dict) -> str | None:
-    """The store page for an offer.
-
-    Three fields carry a slug and which one is populated varies by offer, which
-    is why this tries all of them. Checked against the live endpoint: of eleven
-    listed promotions, seven had a null `productSlug` and every one of them had
-    a `catalogNs` mapping. A `productSlug` also arrives with a `/home` suffix
-    that the URL does not want.
-    """
-    slug = None
-    for mapping in (element.get("catalogNs") or {}).get("mappings") or []:
-        if mapping.get("pageSlug"):
-            slug = mapping["pageSlug"]
-            break
-    if not slug:
-        for mapping in element.get("offerMappings") or []:
-            if mapping.get("pageSlug"):
-                slug = mapping["pageSlug"]
-                break
-    if not slug:
-        slug = element.get("productSlug") or element.get("urlSlug")
+def _slug_url(slug: str | None) -> str | None:
     if not slug:
         return None
-    slug = slug.split("/")[0]
-    return f"{STORE_ROOT}/{LOCALE}/p/{slug}"
+    # A `productSlug` arrives with a `/home` suffix that the URL does not want.
+    return f"{STORE_ROOT}/{LOCALE}/p/{slug.split('/')[0]}"
+
+
+def _mapping_slug(element: dict, key: str, page_type: str | None = None) -> str | None:
+    """The first `pageSlug` under `element[key]`, optionally of one page type."""
+    mappings = element.get(key)
+    if isinstance(mappings, dict):  # catalogNs carries its list one level down
+        mappings = mappings.get("mappings")
+    for mapping in mappings or []:
+        if not mapping.get("pageSlug"):
+            continue
+        if page_type and mapping.get("pageType") != page_type:
+            continue
+        return mapping["pageSlug"]
+    return None
+
+
+def _product_url(element: dict) -> str | None:
+    """The store page **for this offer**, which for a DLC is not the game's page.
+
+    Measured against the live endpoint (Aug 2026), and this is the trap: an
+    add-on's `catalogNs.mappings` points at the **base game**, and only
+    `offerMappings` points at the add-on. The free "Epic Mage Bundle" lists
+    `catalogNs → albion-online-7eb24d` (pageType `productHome`) and
+    `offerMappings → albion-online-epic-mage-bundle-2ceb19` (pageType `offer`).
+
+    So preferring `catalogNs` first - which this did - gave a DLC the base
+    game's URL, and `is_owned` then answered a question nobody asked: whether
+    the account owns *Albion Online*, reported as whether it owns the bundle.
+    That is precisely the "teaches the ledger a lie" case the contract warns
+    about. For an add-on the offer's own mapping leads; for everything else the
+    old order stands, since `catalogNs` is the field most often populated (seven
+    of eleven promotions had a null `productSlug`).
+    """
+    if (element.get("offerType") or "").upper() == "ADD_ON":
+        return (
+            _slug_url(_mapping_slug(element, "offerMappings", "offer"))
+            or _slug_url(_mapping_slug(element, "offerMappings"))
+            or _slug_url(element.get("urlSlug"))
+            or _slug_url(_mapping_slug(element, "catalogNs"))
+        )
+    return (
+        _slug_url(_mapping_slug(element, "catalogNs"))
+        or _slug_url(_mapping_slug(element, "offerMappings"))
+        or _slug_url(element.get("productSlug") or element.get("urlSlug"))
+    )
+
+
+def _base_game_url(element: dict) -> str | None:
+    """The page of the game a DLC belongs to, or None if this is not a DLC.
+
+    `catalogNs.mappings` with pageType `productHome` is the base product, and a
+    DLC shares its namespace with the game it extends - which is what makes the
+    relationship discoverable at all, without a second request.
+    """
+    if (element.get("offerType") or "").upper() != "ADD_ON":
+        return None
+    return _slug_url(
+        _mapping_slug(element, "catalogNs", "productHome")
+        or _mapping_slug(element, "catalogNs")
+    )
 
 
 def _image_url(element: dict) -> str | None:

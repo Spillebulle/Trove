@@ -47,6 +47,15 @@ def serialise(db: Session, account: Account) -> AccountRead:
         .filter(Claim.account_id == account.id, Claim.outcome == "claimed")
         .count()
     )
+    claimed_dlc = (
+        db.query(Claim.id)
+        .filter(
+            Claim.account_id == account.id,
+            Claim.outcome == "claimed",
+            Claim.kind == "dlc",
+        )
+        .count()
+    )
     return AccountRead(
         id=account.id,
         store=account.store,
@@ -68,6 +77,7 @@ def serialise(db: Session, account: Account) -> AccountRead:
         notes=account.notes,
         created_at=account.created_at,
         claimed_count=claimed,
+        claimed_dlc_count=claimed_dlc,
         busy_with=manager.who_holds(account.id),
     )
 

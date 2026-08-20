@@ -92,6 +92,38 @@ class ClaimResult:
 
 
 @dataclass(slots=True)
+class BaseGame:
+    """The game a piece of downloadable content belongs to.
+
+    A DLC is only worth anything if the account owns the game it extends, so a
+    free DLC has a prerequisite that a free game does not. This is what an
+    adapter reports back about that prerequisite, and every field that could not
+    be established is `None` rather than a guess - the runner's rule is that it
+    only acts on what is known and explains itself when it is not.
+
+    `owned` and `free` are three-valued on purpose. `None` means "could not
+    tell", which must never be collapsed into `False`: skipping a claim because
+    the check failed is a different thing from skipping it because the account
+    genuinely lacks a paid game, and only the second is worth telling the user
+    about as a settled fact.
+
+    `offer` is the base game as a claimable offer, present only when the
+    adapter worked out how to claim it. Without it the base game can be
+    reported on but not bought, which is still useful: it is the difference
+    between "you need X" and "you need X, and Trove is getting it for you".
+    """
+
+    title: str
+    url: str | None = None
+    owned: bool | None = None
+    free: bool | None = None
+    # What the store says it costs, for the sentence a person reads when a DLC
+    # is skipped: "Albion Online (£15.99)" beats "the base game".
+    price_note: str | None = None
+    offer: "FreeOffer | None" = None
+
+
+@dataclass(slots=True)
 class Requirement:
     """Something an account needs before this adapter can work.
 
@@ -130,6 +162,19 @@ class BaseAdapter(ABC):
     @property
     def sign_in_page(self) -> str:
         return self.signin_url or self.login_url
+
+    async def inspect_base_game(
+        self, page: Page, offer: "FreeOffer"
+    ) -> "BaseGame | None":
+        """What game this DLC needs, and whether the account has it.
+
+        Called only for an offer whose `kind` is `dlc`. `None` means this
+        adapter cannot say - which is the honest default, and leaves the DLC to
+        be attempted on its own as it always was.
+
+        Costs one page load, so it is only called when there is a DLC to claim.
+        """
+        return None
 
     def checkout_url(self, offer: "FreeOffer") -> str | None:
         """The page a person opens to finish this offer's checkout by hand.

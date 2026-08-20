@@ -675,6 +675,39 @@ to a stopped app.
   keep being refused, and answering the challenge again does not clear it -
   which is what `POST /api/accounts/{id}/reset-profile` exists for. Reach for
   that before reaching for a stealth plugin.
+  **Add-ons, and the slug trap (0.1.21).** Epic gives away DLC as well as games -
+  the 20 Aug 2026 giveaway was the "Epic Mage Bundle" for Albion Online - and an
+  add-on is only worth claiming if the account owns the game it extends. Two
+  things measured off the live endpoint, both load-bearing:
+
+  1. **An add-on's `catalogNs.mappings` points at the BASE GAME, not at the
+     add-on.** Only `offerMappings` (pageType `offer`) points at the add-on
+     itself. The Mage Bundle lists `catalogNs → albion-online-7eb24d`
+     (`productHome`) and `offerMappings → albion-online-epic-mage-bundle-2ceb19`.
+     `_product_url` preferred `catalogNs` first, so **every DLC got the base
+     game's URL** - and `is_owned` then answered whether the account owned
+     *Albion Online* while the ledger recorded it as the bundle. That is the
+     "teaches the ledger a lie" case the adapter contract warns about, and it
+     was live. `_product_url` now branches on `offerType == ADD_ON`.
+  2. **That same mapping is how the base game is found**, which is what makes
+     the prerequisite check possible without a second request: an add-on shares
+     its namespace with its game, and `catalogNs[productHome]` is the game's
+     page. It rides along in `offer.extra["base_url"]`.
+
+  `epic.inspect_base_game` then loads that page once and reads owned (the
+  `OWNED` marker), free (the product CTA: "Get" free, "Buy Now"/a price paid,
+  "In Library" owned), and the base game's offer id, so a free base game can be
+  claimed first. The offer id has to come off the page because **Epic's catalog
+  GraphQL answers 403 to any non-browser client** (measured), and the signed-in
+  page is past Cloudflare and is therefore the only client that can see it.
+  `runner._satisfy_base_game` takes it from there: owned → claim the add-on;
+  free → claim the game first (its own ledger row, `offer_id` NULL, because it
+  is a real claim but not a listed giveaway) then the add-on; paid or unknown →
+  claim nothing and write down why, by name and price. `tools/dlc_sim.py` covers
+  all six branches in CI. **The endpoint shape and the URL fix are verified
+  against live data; the page-reading half - CTA wording, the offer-id regex -
+  is not, and will first be exercised on the Mage Bundle.**
+
 - **Prime Gaming** (what the user called Twitch Prime; Twitch Prime was renamed
   years ago) — needs an active Amazon Prime subscription. Many of its offers are
   *keys for other stores* (GOG, Epic, Legacy Games) rather than a library add, so
@@ -908,6 +941,15 @@ window. See the two paragraphs on it above.
   unaffected either way.
 - **A second claim of any kind.** One claim is one sample: it proves the path
   exists, not that it is reliable. The next weekly giveaway is the test.
+- **The DLC page-reading half.** The add-on/base-game *data* is measured off
+  the live endpoint (see the Epic notes), and the URL fix is proven against it.
+  What is written from reasoning rather than observation is what
+  `inspect_base_game` reads off the base game's **page**: that the CTA says
+  "Get" / "Buy Now" / "In Library", and that the offer id appears in the page as
+  a purchase link. Both fail safe - an unreadable page means "could not tell",
+  which skips the add-on with that written in the ledger rather than claiming
+  blind - and both log what they found, so the Mage Bundle run is the
+  measurement. Fix them there rather than guessing again.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in

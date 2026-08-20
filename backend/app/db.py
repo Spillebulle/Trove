@@ -85,6 +85,12 @@ def _migrate(engine) -> None:
             "login_password": "TEXT",
             "checkout_offer": "VARCHAR(200)",
         },
+        "claims": {
+            # 0.1.21: the ledger tells a DLC from a game and carries its poster.
+            # Existing rows default to "game", which is what they all were.
+            "kind": "VARCHAR(20) NOT NULL DEFAULT 'game'",
+            "image_url": "TEXT",
+        },
     }
     with engine.begin() as conn:
         for table, columns in additions.items():

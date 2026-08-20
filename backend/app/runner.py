@@ -660,6 +660,16 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
             db.commit()
             continue
 
+        # An add-on needs the game it extends. Claiming a DLC into an account
+        # that does not own the base game gets something unusable, so the
+        # prerequisite is settled first - and if it cannot be, the DLC is
+        # skipped with the reason written down rather than attempted blind.
+        if offer.kind == "dlc":
+            if not await _satisfy_base_game(
+                db, account, run, adapter, page, offer, row, waiter
+            ):
+                continue
+
         result = await adapter.claim(page, offer, waiter=waiter)
         _record(
             db,
@@ -697,29 +707,139 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
         db.commit()
 
 
+async def _satisfy_base_game(
+    db, account, run, adapter, page, offer, row, waiter
+) -> bool:
+    """Make sure the game a DLC needs is owned. True if the DLC may be claimed.
+
+    Three ways this goes, and they are the three a person would take:
+
+    * **The game is already owned** - claim the add-on, nothing to do here.
+    * **The game is not owned but is free** - get the game first, then the
+      add-on. The game gets its own ledger row, because it is a real thing that
+      was really claimed even though it was never a listed giveaway.
+    * **The game is not owned and costs money** - do not claim the add-on. It
+      would sit in the library attached to nothing. The ledger records why, by
+      name and price, so the answer to "why didn't it claim that?" is on the
+      page rather than in a log.
+
+    An adapter that cannot say (`None`, or a check that did not resolve) is
+    treated as the last case but worded as the uncertainty it is: Trove does
+    not claim on a guess, and it does not pretend the guess was a finding.
+    """
+    base = await adapter.inspect_base_game(page, offer)
+    if base is None:
+        return True  # the store has no such notion; the add-on stands alone
+
+    if base.owned is True:
+        logger.info("Epic: %r is owned, so %r can be claimed.", base.title, offer.title)
+        return True
+
+    if base.owned is None and base.free is None:
+        _record(
+            db, account, run, row,
+            outcome="not_eligible",
+            detail=(
+                f"This add-on is for {base.title}, and Trove could not tell "
+                "whether your account has it. It is left alone rather than "
+                "claimed into an account that may not be able to use it."
+            ),
+        )
+        db.commit()
+        return False
+
+    if base.free is True and base.offer is not None:
+        logger.info(
+            "Epic: %r needs %r, which is free. Claiming the game first.",
+            offer.title, base.title,
+        )
+        result = await adapter.claim(page, base.offer, waiter=waiter)
+        _record(
+            db, account, run, None,
+            outcome=result.outcome,
+            detail=(result.detail or "Claimed so the add-on could be used.")
+            + f" Claimed because {offer.title} needs it.",
+            shot=result.screenshot,
+            title=base.title,
+            kind="game",
+            image_url=row.image_url,
+        )
+        if result.outcome == "claimed":
+            run.claimed += 1
+        elif result.outcome == "already_owned":
+            run.already_owned += 1
+        db.commit()
+        if result.outcome not in ("claimed", "already_owned"):
+            # The game did not land, so the add-on would be useless. Say so
+            # against the add-on too, rather than leaving it looking untried.
+            _record(
+                db, account, run, row,
+                outcome="not_eligible",
+                detail=(
+                    f"Not claimed: {base.title}, which this add-on needs, could "
+                    "not be claimed first."
+                ),
+            )
+            db.commit()
+            return False
+        return True
+
+    # Free, but Trove could not work out how to claim it.
+    if base.free is True:
+        detail = (
+            f"This add-on is for {base.title}, which your account does not have. "
+            "The game is free, but Trove could not work out how to claim it "
+            "automatically - claim it yourself and Trove will take the add-on "
+            "on its next run."
+        )
+    else:
+        price = f" ({base.price_note})" if base.price_note else ""
+        detail = (
+            f"This add-on is for {base.title}{price}, which your account does "
+            "not have and which is not free. Trove does not buy anything, so "
+            "the add-on is left; it will be claimed on a later run if you buy "
+            "the game while the offer is still on."
+        )
+    logger.info("Epic: skipping %r - %s", offer.title, detail)
+    _record(db, account, run, row, outcome="not_eligible", detail=detail)
+    db.commit()
+    return False
+
+
 def _record(
     db: Session,
     account: Account,
     run: Run,
-    offer: Offer,
+    offer: Offer | None,
     outcome: str,
     detail: str | None = None,
     key_code: str | None = None,
     key_store: str | None = None,
     shot: str | None = None,
+    title: str | None = None,
+    kind: str | None = None,
+    image_url: str | None = None,
 ) -> Claim:
     """Write the ledger row.
 
-    The title is copied off the offer rather than left to a join: an offer row
-    can be pruned once its promotion is a year gone, and the ledger has to keep
-    reading properly on its own.
+    The title, the kind and the poster are copied off the offer rather than left
+    to a join: an offer row can be pruned once its promotion is a year gone, and
+    the ledger has to keep reading properly - and looking like itself - on its
+    own.
+
+    `offer` may be None, for something claimed that was never a listed
+    promotion: the base game bought so a free DLC could be used is a real claim
+    with a real row, but it is not a giveaway and has no offer of its own.
+    `title`, `kind` and `image_url` then say what it was.
     """
     claim = Claim(
         account_id=account.id,
-        offer_id=offer.id,
+        offer_id=offer.id if offer is not None else None,
         run_id=run.id,
         store=account.store,
-        title=offer.title,
+        title=title or (offer.title if offer is not None else "Unknown"),
+        kind=kind or (offer.kind if offer is not None else "game"),
+        image_url=image_url or (offer.image_url if offer is not None else None),
         outcome=outcome,
         detail=detail,
         key_code=encrypt(key_code) if key_code else None,

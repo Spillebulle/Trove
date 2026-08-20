@@ -230,6 +230,15 @@ class Claim(Base):
     # the promotion is long over; the ledger is permanent and has to keep
     # reading properly on its own.
     title = Column(String(300), nullable=False)
+    # What was claimed: a game, an add-on (DLC), or a key. Copied off the offer
+    # for the same reason the title is - the ledger outlives the offer row - and
+    # it is what lets the interface say "one game, one add-on" rather than
+    # counting everything as a game. A DLC claim is worth telling apart: it is
+    # only useful if the base game is owned, which is a thing that can go wrong.
+    kind = Column(String(20), nullable=False, default="game")
+    # The poster, copied for the same reason. A ledger with the artwork in it
+    # reads as a shelf of what you own rather than as a log file.
+    image_url = Column(Text, nullable=True)
 
     outcome = Column(String(30), nullable=False, index=True)
     detail = Column(Text, nullable=True)

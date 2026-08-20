@@ -112,6 +112,20 @@ export function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
   )
 }
 
+/**
+ * What a thing is - an add-on, a key - rather than how it is doing.
+ *
+ * Deliberately not a `StatusBadge`: this is a classification, and the tones
+ * (good / caution / critical) are spoken for by outcomes. It is also not the
+ * accent, which never means a state or a category (§2.4). So: the plain badge,
+ * with the word doing the work. A game gets nothing at all, because "game" is
+ * the ordinary case and a badge on every row is a badge that says nothing.
+ */
+export function KindBadge({ kind }: { kind: string }) {
+  if (kind !== 'dlc' && kind !== 'key') return null
+  return <span className={BADGE_CLASS.neutral}>{kind === 'dlc' ? 'Add-on' : 'Key'}</span>
+}
+
 /* ── Empty and error states ──────────────────────────────────────────────── */
 
 /**

@@ -14,6 +14,7 @@ import { useToast } from '@/lib/app-context'
 import {
   ACCOUNT_STATUS_LABEL,
   ACCOUNT_STATUS_TONE,
+  claimedSplit,
   everyHours,
   fullTime,
   relativeTime,
@@ -104,6 +105,13 @@ export function Accounts() {
                   <div>
                     <dt className="eyebrow">Claimed</dt>
                     <dd className="figure text-fg">{account.claimed_count}</dd>
+                    {/* The split only when there is one: "3" with "3 games, 0
+                        add-ons" under it is a line that says nothing twice. */}
+                    {account.claimed_dlc_count > 0 && (
+                      <dd className="mt-0.5 text-tiny text-dim">
+                        {claimedSplit(account.claimed_count, account.claimed_dlc_count)}
+                      </dd>
+                    )}
                   </div>
                   <div>
                     <dt className="eyebrow">Last run</dt>
