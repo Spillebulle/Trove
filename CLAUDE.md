@@ -694,12 +694,34 @@ to a stopped app.
      its namespace with its game, and `catalogNs[productHome]` is the game's
      page. It rides along in `offer.extra["base_url"]`.
 
+  3. **An add-on and its game are the same product page, on different tabs**
+     (reported from a real run, 0.1.22): the add-on is the "Add-ons" tab and the
+     game is "Overview". Arriving from the add-on can leave the page on the
+     add-on's tab, where **the game's own "Get" button is not** - so the check
+     found no button, concluded it could not work out how to claim the game, and
+     the free game was never claimed. `epic._show_overview` clicks through to
+     Overview first, role-scoped (`[role="tab"]`) so it cannot hit a stray
+     "Overview" link in the page body, and skipped when the tab is already
+     `aria-selected`.
+
   `epic.inspect_base_game` then loads that page once and reads owned (the
   `OWNED` marker), free (the product CTA: "Get" free, "Buy Now"/a price paid,
   "In Library" owned), and the base game's offer id, so a free base game can be
   claimed first. The offer id has to come off the page because **Epic's catalog
-  GraphQL answers 403 to any non-browser client** (measured), and the signed-in
-  page is past Cloudflare and is therefore the only client that can see it.
+  GraphQL answers 403 to any non-browser client** and its `store-content` API
+  404s for these slugs (both measured), so the signed-in page is the only client
+  that can see it.
+
+  **The offer id is asked of Epic, not scraped out of it.** Three ways, in
+  order: a purchase link in the markup; a single `offerId` the page carries
+  (only when there is exactly one, so a page listing add-ons cannot hand back
+  the wrong one); and failing both, **press the game's own "Get" and read the
+  URL Epic navigates to**. The third is the reliable one, because a page that
+  builds its purchase URL in script has no id in its HTML to find - and it is
+  Epic building the link rather than Trove guessing at markup. Pressing "Get"
+  opens a checkout and orders nothing, and it is only ever reached when the game
+  is **free and unowned**: on a paid game that button says "Buy Now", and Trove
+  does not buy anything, so the id is not resolved at all in that case.
   `runner._satisfy_base_game` takes it from there: owned → claim the add-on;
   free → claim the game first (its own ledger row, `offer_id` NULL, because it
   is a real claim but not a listed giveaway) then the add-on; paid or unknown →
@@ -950,6 +972,13 @@ window. See the two paragraphs on it above.
   which skips the add-on with that written in the ledger rather than claiming
   blind - and both log what they found, so the Mage Bundle run is the
   measurement. Fix them there rather than guessing again.
+
+  One half of this has now had a first contact with reality and was wrong: the
+  page was left on the **Add-ons tab**, so the game's button was not on it (see
+  the Epic notes). That is fixed and the tab click is written from the report
+  rather than from a screenshot, so it is itself unproven. The `cta=` and
+  `claimable=` values in the `Epic: %r needs %r` log line are what say whether
+  the rest of it reads correctly; that line is the thing to look at next.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in

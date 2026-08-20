@@ -216,6 +216,20 @@ PRODUCT_CTA = [
     'button:has-text("Get")',
 ]
 
+# A product page's tab bar. An add-on and the game it belongs to are the *same
+# product page* on Epic - the add-on is the "Add-ons" tab, the game is
+# "Overview" - so arriving from an add-on can leave the page showing the add-on
+# tab, where the game's own "Get" button is not. Clicking through to Overview is
+# what a person does, and it is the difference between finding the game's button
+# and reporting that there wasn't one. Role-scoped selectors lead so this can
+# only ever hit a real tab and not a stray "Overview" link in the page body.
+OVERVIEW_TAB = [
+    '[role="tab"]:has-text("Overview")',
+    'a[role="tab"]:has-text("Overview")',
+    'button[role="tab"]:has-text("Overview")',
+    'nav a:has-text("Overview")',
+]
+
 # A price on the product page, for saying *how* paid a base game is when a DLC
 # is skipped over it. Any currency: the account's country decides the symbol.
 PRODUCT_PRICE = [
@@ -442,6 +456,8 @@ class EpicAdapter(BaseAdapter):
             logger.info("Epic: the base game's page (%s) did not load.", base_url)
             return BaseGame(title="the base game", url=base_url)
 
+        await self._show_overview(page)
+
         title = None
         try:
             title = (await page.title() or "").split("|")[0].strip() or None
@@ -479,8 +495,16 @@ class EpicAdapter(BaseAdapter):
                     pass
             price_note = price_note or (cta_text[:24] or None)
 
+        # Only work out how to claim it when it is free and not already owned.
+        # `_base_offer_id` can end by pressing the page's own button to make
+        # Epic name the offer, and that button on a *paid* game is "Buy Now" -
+        # which must never be pressed. Trove does not buy anything.
         base_offer = None
-        offer_id = await self._base_offer_id(page, offer)
+        offer_id = (
+            await self._base_offer_id(page, offer)
+            if owned is not True and free is True
+            else None
+        )
         if offer_id:
             base_offer = FreeOffer(
                 external_id=f"{offer.extra.get('namespace')}:{offer_id}",
@@ -507,15 +531,53 @@ class EpicAdapter(BaseAdapter):
             offer=base_offer,
         )
 
+    async def _show_overview(self, page: Page) -> None:
+        """Put the product page on its Overview tab, where the game's button is.
+
+        An add-on and the game it extends share a product page: the add-on is
+        the "Add-ons" tab and the game is "Overview". Arriving from an add-on
+        can leave the page on the add-on's tab, and the game's own "Get" button
+        is not on that tab - so the check would report "no button" for a game
+        that has one, and the free game would never be claimed. Best-effort by
+        design: a page already on Overview has nothing to click, and a page
+        whose tabs have been renamed is no worse off than before.
+        """
+        tab = await _first_visible(page, OVERVIEW_TAB, timeout_ms=1200)
+        if tab is None:
+            return
+        try:
+            if (await tab.get_attribute("aria-selected")) == "true":
+                return  # already the tab we want
+        except Exception:
+            pass
+        logger.info("Epic: switching the product page to its Overview tab.")
+        try:
+            await tab.click(timeout=4000)
+            await page.wait_for_timeout(1200)
+        except Exception as exc:
+            logger.debug("Could not switch to the Overview tab: %s", exc)
+
     async def _base_offer_id(self, page: Page, offer: FreeOffer) -> str | None:
-        """The base game's offer id, read off its own product page.
+        """The base game's offer id: asked of Epic rather than scraped from it.
 
         Epic's public catalog API refuses a plain HTTP client (measured: the
-        store's GraphQL answers 403 to anything that is not a browser), so this
-        is asked of the page that is already open - which is signed in and past
-        Cloudflare, and therefore the one client that can see it. The page
-        builds its own purchase links, and an offer id is 32 hex characters
-        under the same namespace the add-on carries.
+        store's GraphQL answers 403 to anything that is not a browser), so the
+        only client that can see this is the signed-in page already open.
+
+        Three ways, cheapest and most certain first:
+
+        1. **A purchase link in the page**, which is unambiguous about what the
+           id is for.
+        2. **A single `offerId` the page carries for its own use** - only
+           trusted when there is exactly one, so a page that lists add-ons
+           alongside the game cannot hand back the wrong one.
+        3. **Ask the store.** Press the game's own "Get" and read the URL Epic
+           navigates to. This is the reliable one, because it is Epic building
+           the link rather than Trove guessing at its markup - the first two
+           depend on the id being *in* the HTML, and a page that builds its
+           purchase URL in script has no such thing to find. Pressing "Get"
+           opens the checkout; it does not order anything, and this is only
+           reached when the game is free and about to be claimed anyway.
         """
         namespace = offer.extra.get("namespace")
         if not namespace:
@@ -524,22 +586,53 @@ class EpicAdapter(BaseAdapter):
             content = await page.content()
         except Exception as exc:
             logger.debug("Could not read the base game's page: %s", exc)
-            return None
-        # A purchase link, which is unambiguous about what the id is for.
+            content = ""
+
         found = re.search(rf"1-{re.escape(namespace)}-([0-9a-f]{{32}})", content)
         if found:
             return found.group(1)
-        # Failing that, an offerId the page carries for its own use. Only
-        # trusted when there is exactly one, so a page listing add-ons as well
-        # as the game cannot hand back the wrong one.
+
         ids = set(re.findall(r'"offerId"\s*:\s*"([0-9a-f]{32})"', content))
         ids.discard(offer.extra.get("offer_id") or "")
         if len(ids) == 1:
             return ids.pop()
-        logger.info(
-            "Epic: could not work out how to claim the base game (%d candidate ids).",
-            len(ids),
-        )
+
+        return await self._offer_id_by_pressing_get(page, namespace)
+
+    async def _offer_id_by_pressing_get(self, page: Page, namespace: str) -> str | None:
+        """Press the product page's "Get" and read the offer id out of the URL."""
+        cta = await _first_visible(page, PRODUCT_CTA, timeout_ms=2500)
+        if cta is None:
+            logger.info("Epic: no button on the base game's page to ask with.")
+            return None
+        before = page.url
+        try:
+            await cta.click(timeout=6000)
+        except Exception as exc:
+            logger.info("Epic: the base game's button could not be pressed: %s", exc)
+            return None
+        # Epic navigates to its own checkout; give it a moment and read where
+        # it went. A checkout that opens in place still puts the offer in the
+        # URL, which is the thing being asked for.
+        for _ in range(12):
+            await page.wait_for_timeout(500)
+            found = re.search(rf"1-{re.escape(namespace)}-([0-9a-f]{{32}})", page.url)
+            if found:
+                logger.info("Epic: the store named the base game's offer itself.")
+                return found.group(1)
+            if "/purchase" in page.url and page.url != before:
+                break
+        # It may have rendered the checkout without changing the address; the
+        # markup then carries the link even though it did not before.
+        try:
+            found = re.search(
+                rf"1-{re.escape(namespace)}-([0-9a-f]{{32}})", await page.content()
+            )
+        except Exception:
+            found = None
+        if found:
+            return found.group(1)
+        logger.info("Epic: pressing the base game's button did not name an offer.")
         return None
 
     def checkout_url(self, offer: FreeOffer) -> str | None:

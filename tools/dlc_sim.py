@@ -24,8 +24,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 os.environ.setdefault("DATA_DIR", "./data")
 
+import app.adapters.epic as epic  # noqa: E402
 from app import runner  # noqa: E402
 from app.adapters.base import BaseGame, ClaimResult, FreeOffer  # noqa: E402
+
+NS = "72520902fc594621b6daa5a6217b4ee7"
+BASE_ID = "a" * 32
 
 
 class FakeRow:
@@ -112,6 +116,81 @@ async def _case(name, base, *, expect_go, expect_claims, expect_words=(), base_r
     return ok
 
 
+class FakeCTA:
+    """The product page's Get button, which navigates when pressed."""
+
+    def __init__(self, page, goes_to=None):
+        self.page = page
+        self.goes_to = goes_to
+
+    async def inner_text(self):
+        return "Get"
+
+    async def get_attribute(self, name):
+        return None
+
+    async def click(self, timeout=0):
+        if self.goes_to:
+            self.page.url = self.goes_to
+
+
+class FakeProductPage:
+    """A product page that carries the offer id in one of several ways."""
+
+    def __init__(self, content="", url="https://store.epicgames.com/en-US/p/albion", goes_to=None):
+        self._content = content
+        self.url = url
+        self.goes_to = goes_to
+
+    async def content(self):
+        return self._content
+
+    async def wait_for_timeout(self, ms):
+        pass
+
+
+async def _offer_id_cases() -> bool:
+    """`_base_offer_id` must find the id in the page, or make Epic name it."""
+    adapter = epic.EpicAdapter()
+    ok = True
+    # The add-on shares its namespace with the game, which is what makes the
+    # purchase link recognisable as the *base game's* rather than anything's.
+    offer = _offer()
+    offer.extra["namespace"] = NS
+
+    async def with_cta(page, cta):
+        async def fake_first_visible(p, selectors, timeout_ms=0):
+            return cta
+        epic._first_visible = fake_first_visible
+        return await adapter._base_offer_id(page, offer)
+
+    # 1. A purchase link sitting in the markup.
+    got = await with_cta(FakeProductPage(content=f'<a href="/purchase?offers=1-{NS}-{BASE_ID}">Get</a>'), None)
+    if got != BASE_ID:
+        print("FAIL: did not read the offer id out of a purchase link:", got); ok = False
+
+    # 2. No link, but exactly one offerId the page carries for itself.
+    got = await with_cta(FakeProductPage(content=f'{{"offerId":"{BASE_ID}"}}'), None)
+    if got != BASE_ID:
+        print("FAIL: did not take the single offerId on the page:", got); ok = False
+
+    # 3. Neither: press Get and let Epic name it in the URL it goes to.
+    page = FakeProductPage(content="<html>nothing useful</html>")
+    cta = FakeCTA(page, goes_to=f"https://store.epicgames.com/purchase?offers=1-{NS}-{BASE_ID}")
+    got = await with_cta(page, cta)
+    if got != BASE_ID:
+        print("FAIL: pressing Get did not yield the offer id:", got); ok = False
+
+    # 4. Nothing works: say so rather than inventing one.
+    page = FakeProductPage(content="<html>nothing useful</html>")
+    got = await with_cta(page, FakeCTA(page, goes_to=None))
+    if got is not None:
+        print("FAIL: expected None when the store names nothing, got:", got); ok = False
+
+    print(f"{'ok  ' if ok else 'FAIL'} offer-id resolution: link, single id, pressing Get, and giving up")
+    return ok
+
+
 async def main() -> int:
     albion = "Albion Online"
     base_offer = FreeOffer(external_id="ns:base", title=albion, kind="game",
@@ -137,6 +216,7 @@ async def main() -> int:
                       expect_words=("could not be claimed",), base_result="failed")
     # No opinion from the adapter: the add-on stands alone, as it always did.
     ok &= await _case("adapter says nothing", None, expect_go=True, expect_claims=[])
+    ok &= await _offer_id_cases()
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 
