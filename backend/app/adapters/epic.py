@@ -35,6 +35,7 @@ behaviour whether the page changed or the selector was always wrong.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -246,32 +247,28 @@ async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 150
     watches all of them at once, and `filter(visible=True)` keeps a hidden
     element that happens to sort first in the DOM from masking a visible match.
     """
-    combined = None
-    for selector in selectors:
-        loc = page.locator(selector)
-        combined = loc if combined is None else combined.or_(loc)
-    if combined is None:
-        return None
-    try:
-        # One wait for any of them to exist - the fast "is none of this here"
-        # path costs a single timeout, not one per selector.
-        await combined.first.wait_for(state="attached", timeout=timeout_ms)
-    except PlaywrightTimeout:
-        return None
-    except Exception as exc:  # a malformed selector is a bug, not a page state
-        logger.debug("Selector group did not resolve: %s", exc)
-        return None
-    # Then return the first *visible* match, so a hidden element that sorts
-    # first in the DOM does not mask the button a person would click.
-    try:
-        count = await combined.count()
-        for index in range(count):
-            element = combined.nth(index)
-            if await element.is_visible():
-                return element
-    except Exception as exc:
-        logger.debug("Visibility scan failed: %s", exc)
-    return None
+    # Poll all the selectors in priority order until one is visible or the
+    # timeout passes. The order matters and must be honoured: the dialog-scoped
+    # "I accept" has to win over a stray "Accept" elsewhere on the page, and the
+    # real add-to-library button over a look-alike. `is_visible()` is an instant
+    # check with no per-selector wait, so a whole round costs milliseconds; the
+    # timeout is spent sleeping between rounds, not multiplied by the number of
+    # selectors. So this is both correct (priority kept) and fast (an absent
+    # group costs one timeout, not one per selector) - the earlier `or_` version
+    # was fast but lost the order, which is what made it click the wrong thing.
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_ms / 1000
+    while True:
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                if await locator.is_visible():
+                    return locator
+            except Exception as exc:  # a malformed selector is a bug, not a state
+                logger.debug("Selector %r did not resolve: %s", selector, exc)
+        if loop.time() >= deadline:
+            return None
+        await asyncio.sleep(0.1)
 
 
 class EpicAdapter(BaseAdapter):
@@ -578,6 +575,11 @@ class EpicAdapter(BaseAdapter):
         this returns False so the caller re-reads the page; if nothing is
         covering it, the block is a real fault worth stopping on.
         """
+        try:
+            label = " ".join((await locator.inner_text() or "").split())[:40]
+        except Exception:
+            label = "?"
+        logger.info("Epic checkout: clicking %r.", label)
         try:
             await locator.click(timeout=5000)
             return True

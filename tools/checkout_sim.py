@@ -48,7 +48,53 @@ _VISIBLE = {
 }
 
 
+async def _priority_check() -> bool:
+    """_first_visible must return the *first visible selector in list order*.
+
+    The regression that made the checkout click the wrong thing: a speed change
+    unioned the selectors and returned the first match in DOM order, dropping
+    the priority that keeps the dialog-scoped "I accept" ahead of a stray
+    "Accept" elsewhere. This asserts priority with a fake page - no browser.
+    """
+    class FakeLoc:
+        def __init__(self, sel, visible):
+            self.sel = sel
+            self._v = visible
+
+        @property
+        def first(self):
+            return self
+
+        async def is_visible(self):
+            return self._v
+
+    class FakePage:
+        def __init__(self, visible):
+            self.visible = visible
+
+        def locator(self, sel):
+            return FakeLoc(sel, sel in self.visible)
+
+    # The dialog-scoped "I accept" (first in ACCEPT) and a loose "Accept" (last)
+    # are both visible; priority must return the first.
+    page = FakePage({epic.ACCEPT[0], epic.ACCEPT[-1]})
+    got = await epic._first_visible(page, epic.ACCEPT, 200)
+    if got is None or got.sel != epic.ACCEPT[0]:
+        print("FAIL: _first_visible lost selector priority (would click the wrong element)")
+        print("  returned:", None if got is None else got.sel)
+        return False
+    # With only the loose one visible, it returns that.
+    page = FakePage({epic.ACCEPT[-1]})
+    got = await epic._first_visible(page, epic.ACCEPT, 200)
+    if got is None or got.sel != epic.ACCEPT[-1]:
+        print("FAIL: _first_visible did not fall through to a lower-priority match")
+        return False
+    print("priority OK")
+    return True
+
+
 async def main() -> int:
+    ok_priority = await _priority_check()
     state = {"stage": "order", "challenge_seen": 0, "clicks": []}
 
     class FakeLoc:
@@ -119,6 +165,7 @@ async def main() -> int:
               "loop re-submitted the order behind the dialog (the 'error occurred' bug)."); ok = False
     if not any(k == "attention" and img and "captcha" in img for k, img in notified):
         print("FAIL: expected a captcha notification with the screenshot attached"); ok = False
+    ok = ok and ok_priority
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 
