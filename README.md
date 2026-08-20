@@ -1,4 +1,9 @@
-<h1 align="center">Trove</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.png">
+    <img alt="Trove" src="docs/brand/logo-light.png" width="300">
+  </picture>
+</p>
 
 <p align="center">
   A self-hosted claimer for the games that are <b>temporarily free</b> on stores you already have accounts with.<br>

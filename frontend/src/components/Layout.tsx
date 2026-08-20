@@ -255,8 +255,8 @@ export function Layout() {
   }, [location.pathname])
 
   return (
-    <div className="flex min-h-screen flex-col bg-window">
-      <header className="sticky top-0 z-30 flex h-menubar shrink-0 items-center gap-3 border-b border-line bg-chrome px-strip">
+    <div className="flex h-screen flex-col overflow-hidden bg-window">
+      <header className="z-30 flex h-menubar shrink-0 items-center gap-3 border-b border-line bg-chrome px-strip">
         <button
           type="button"
           className="btn-icon lg:hidden"
@@ -337,7 +337,7 @@ export function Layout() {
           </div>
         )}
 
-        <main className="min-w-0 flex-1">
+        <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1200px] px-strip py-5">
             <Outlet />
           </div>

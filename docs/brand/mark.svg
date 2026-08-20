@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Trove">
+  <!-- The Trove mark: three stacked coins - a trove - in the orchid accent.
+       The same shape and ink as the app's top-bar mark and the favicon; a mark
+       is one piece of artwork. #AA85C5 is the accent (oklch(0.674 0.101 310)). -->
+  <rect width="64" height="64" rx="14" fill="#AA85C5"/>
+  <g fill="none" stroke="#ffffff" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="32" cy="20" rx="16" ry="6.8"/>
+    <path d="M16 20v13c0 3.8 7.2 6.8 16 6.8s16-3 16-6.8V20"/>
+    <path d="M16 33v13c0 3.8 7.2 6.8 16 6.8s16-3 16-6.8V33"/>
+  </g>
+</svg>

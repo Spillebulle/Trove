@@ -1,3 +1,5 @@
+![Trove](docs/brand/logo-light.png)
+
 # Trove
 
 Claims the games that are temporarily free on stores you already have accounts

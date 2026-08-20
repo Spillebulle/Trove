@@ -22,6 +22,22 @@
     <meta name="theme-color" content="#0D0E10" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#E4E0D9" media="(prefers-color-scheme: light)" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Link-preview card. Absolute URL because a preview is fetched off the
+         page, and the self-hosted app has no stable public origin of its own -
+         so it points at the artwork in the repo. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Trove" />
+    <meta
+      property="og:description"
+      content="Claims the games that are temporarily free, on your own store accounts."
+    />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/Spillebulle/Trove/main/docs/brand/og.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <title>Trove</title>
     <script>
       // Apply the stored theme before first paint, so there is no flash of the
