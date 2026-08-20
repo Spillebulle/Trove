@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
-from ..browser import NeedsAttention, screenshot, screenshot_name
+from ..browser import CheckoutBlocked, NeedsAttention, screenshot, screenshot_name
 from .base import BaseAdapter, ChallengeWaiter, ClaimResult, FreeOffer, Requirement
 
 logger = logging.getLogger(__name__)
@@ -377,6 +377,18 @@ class EpicAdapter(BaseAdapter):
         # it as "signed out" would send the user to sign in to no effect.
         return False, "Could not tell whether this account is signed in."
 
+    def checkout_url(self, offer: FreeOffer) -> str | None:
+        """The purchase page for one offer, for the un-driven window to finish.
+
+        The same URL a run drives to, opened this time in a browser with no CDP
+        on it - the one Epic's Talon captcha will actually accept a solve from.
+        """
+        namespace = offer.extra.get("namespace")
+        offer_id = offer.extra.get("offer_id")
+        if not namespace or not offer_id:
+            return None
+        return _purchase_url(namespace, offer_id)
+
     async def is_owned(self, page: Page, offer: FreeOffer) -> bool | None:
         if not offer.url:
             return None
@@ -547,30 +559,38 @@ class EpicAdapter(BaseAdapter):
     async def _handle_challenge(
         self, page: Page, offer: FreeOffer, waiter: ChallengeWaiter | None
     ) -> None:
-        """A captcha is up. Wait for the person to solve it, or stop.
+        """A captcha is up at checkout. Route it to the un-driven window.
 
-        Trove does not and will not solve a captcha: it is against the store's
-        terms, it is exactly what bot detection is built to catch, and a
-        solved-by-a-robot captcha is the fastest route to a locked account. So
-        in a watched run the person solves it on the screen and this waits for
-        that; in a scheduled run it stops and asks for a watched run.
+        Trove does not and will not solve a captcha. And the thing this app
+        learned the hard way (Aug 2026, from a real account): a captcha at
+        Epic's checkout **cannot be solved in the driven browser at all**, even
+        by a person. The order request that follows a solve returns HTTP 400
+        ``epic.error.captcha.challenge.failed`` with the token attached - Talon
+        refuses the solve because the browser is CDP-driven, and that is
+        structural, not a fingerprint to patch.
+
+        So this no longer waits for a solve on the driven screen (the old
+        ``waiter`` path, now proven futile for checkout). It raises
+        `CheckoutBlocked`, which tells the person to finish this one order in
+        the **un-driven** sign-in window - the plain Chrome, no CDP, that Epic's
+        captcha already accepts for sign-in. ``waiter`` is left in the signature
+        for the adapter contract, but a checkout captcha does not use it.
         """
-        if waiter is None:
-            raise NeedsAttention(
-                "Epic is asking for a captcha at checkout, and Trove never "
-                "solves these itself. Press \"Run and watch\" and answer it on "
-                "the screen \u2014 the claim carries on the moment it clears.",
-                await self._shot(page, offer, "challenge"),
-            )
-        logger.info("Epic checkout: a captcha is up; waiting for it to be solved.")
-        # A screenshot for the notification - context so a person knows what is
-        # waiting, not a puzzle for Trove to solve.
+        logger.info(
+            "Epic checkout: a captcha is up; the driven browser cannot pass it, "
+            "so stopping for the un-driven window."
+        )
+        # A screenshot for context in the notification - what is waiting, not a
+        # puzzle for Trove to solve.
         shot = await self._shot(page, offer, "captcha")
-
-        async def _cleared() -> bool:
-            return await _first_visible(page, CHALLENGE, timeout_ms=600) is None
-
-        await waiter.wait(_cleared, image_name=shot)
+        raise CheckoutBlocked(
+            "Epic put up a captcha to finish this order, and it will not accept "
+            "a solve from Trove's automated browser - so this one claim has to "
+            "be finished by hand in the sign-in window, the same browser you "
+            "signed in with. Press \u201cFinish the claim here\u201d.",
+            shot,
+            offer_id=offer.external_id,
+        )
 
     async def _drive_checkout(
         self, page: Page, offer: FreeOffer, waiter, net_errors=None

@@ -1,12 +1,23 @@
-"""Drive the Epic checkout loop through a simulated captcha, without a browser.
+"""Drive the Epic checkout loop without a browser, and guard two things.
 
-A guard for the wiring that broke once and quietly: the runner creates a
-`_CaptchaWaiter` for every run, but a re-indent left `_run_claims` calling
-`adapter.claim(page, offer)` without `waiter=waiter`, so `claim` got `None`,
-hit the "Trove never solves these" branch, and the run quit at the captcha
-instead of pausing. This exercises the whole path - claim -> _drive_checkout ->
-_click -> _handle_challenge -> waiter -> resume -> "I accept" -> claimed - with
-`_first_visible` and navigation stubbed, so it runs in a second with no Chrome.
+This runs in CI, in a second, with `_first_visible` and navigation stubbed.
+
+1. **Selector priority.** A speed change once unioned the selectors and returned
+   the first match in DOM order, which dropped the list priority and made the
+   checkout click the wrong element. `_priority_check` asserts `_first_visible`
+   still returns the first *visible* selector in list order.
+
+2. **The checkout, two ways.**
+   - *No captcha:* Add to library, then the "I accept" dialog, then confirmed -
+     and the add-to-library button is clicked **exactly once** even though it
+     lingers on the page behind the dialog while the order processes. A second
+     click there races the first order and Epic answers "An error occurred".
+   - *A captcha:* Epic raises a Talon captcha at "Add to library". Trove does
+     not try to solve it in the driven browser - a human solve there is rejected
+     at the order step (`epic.error.captcha.challenge.failed`, proven Aug 2026).
+     It raises `CheckoutBlocked`, naming the offer, so the claim is finished in
+     the un-driven window instead. This asserts it stops that way rather than
+     hammering the button or reporting a false claim.
 
     python tools/checkout_sim.py
 """
@@ -22,7 +33,7 @@ import os
 os.environ.setdefault("DATA_DIR", "./data")
 
 import app.adapters.epic as epic  # noqa: E402
-from app import runner  # noqa: E402
+from app.browser import CheckoutBlocked  # noqa: E402
 from app.adapters.base import FreeOffer  # noqa: E402
 from playwright.async_api import TimeoutError as PWTimeout  # noqa: E402
 
@@ -39,23 +50,10 @@ _NAMES = {
     id(epic.SIGNED_OUT): "SIGNEDOUT",
 }
 
-_VISIBLE = {
-    "order": {"ORDER"},
-    "captcha": {"ORDER", "CHALLENGE"},  # challenge covers the order button
-    "accept": {"ACCEPT", "ORDER"},  # withdrawal dialog, order still behind it
-    "processing": {"ORDER"},  # dialog gone, order button STILL there, no confirm
-    "confirmed": {"CONFIRMED"},
-}
-
 
 async def _priority_check() -> bool:
-    """_first_visible must return the *first visible selector in list order*.
+    """_first_visible must return the *first visible selector in list order*."""
 
-    The regression that made the checkout click the wrong thing: a speed change
-    unioned the selectors and returned the first match in DOM order, dropping
-    the priority that keeps the dialog-scoped "I accept" ahead of a stray
-    "Accept" elsewhere. This asserts priority with a fake page - no browser.
-    """
     class FakeLoc:
         def __init__(self, sel, visible):
             self.sel = sel
@@ -93,46 +91,54 @@ async def _priority_check() -> bool:
     return True
 
 
-async def main() -> int:
-    ok_priority = await _priority_check()
-    state = {"stage": "order", "challenge_seen": 0, "clicks": []}
+class FakePage:
+    async def wait_for_timeout(self, ms):
+        pass
+
+    def on(self, *a, **k):
+        pass
+
+    def remove_listener(self, *a, **k):
+        pass
+
+
+def _install_stubs(state, with_captcha: bool) -> None:
+    """Point the adapter's page helpers at an in-memory checkout state machine."""
 
     class FakeLoc:
         def __init__(self, name):
             self.name = name
 
+        async def inner_text(self):
+            return self.name
+
         async def click(self, timeout=0):
             state["clicks"].append(self.name)
-            if self.name == "ORDER" and state["stage"] == "order":
-                state["stage"] = "captcha"  # a captcha pops and intercepts
-                raise PWTimeout("intercepted")
-            if self.name == "ACCEPT" and state["stage"] == "accept":
+            if self.name == "ORDER":
+                if with_captcha and state["stage"] == "order":
+                    state["stage"] = "captcha"  # a Talon captcha intercepts
+                    raise PWTimeout("intercepted")
+                # No captcha: the order is placed and the "I accept" dialog opens
+                # in front of the (still-present) add-to-library button.
+                state["stage"] = "accept"
+            elif self.name == "ACCEPT" and state["stage"] == "accept":
                 state["stage"] = "processing"  # order placed; button lingers
 
     async def fake_first_visible(page, selectors, timeout_ms=0):
         name = _NAMES.get(id(selectors))
-        if name == "CONFIRMED" and state["stage"] == "processing":
-            state["stage"] = "confirmed"  # the order goes through on the next look
-            return None
         if name == "CHALLENGE":
-            if state["stage"] == "captcha":
-                state["challenge_seen"] += 1
-                if state["challenge_seen"] == 1:
-                    return FakeLoc("CHALLENGE")  # _click sees it, hands to waiter
-                state["stage"] = "accept"  # the person solved it
+            return FakeLoc("CHALLENGE") if state["stage"] == "captcha" else None
+        if name == "CONFIRMED":
+            if state["stage"] == "processing":
+                state["stage"] = "confirmed"  # goes through on the next look
                 return None
-            return None
-        return FakeLoc(name) if name in _VISIBLE[state["stage"]] else None
-
-    class FakePage:
-        async def wait_for_timeout(self, ms):
-            pass
-
-        def on(self, *a, **k):
-            pass
-
-        def remove_listener(self, *a, **k):
-            pass
+            return FakeLoc("CONFIRMED") if state["stage"] == "confirmed" else None
+        if name == "ACCEPT":
+            return FakeLoc("ACCEPT") if state["stage"] == "accept" else None
+        if name == "ORDER":
+            return FakeLoc("ORDER") if state["stage"] == "order" else None
+        # OWNED, NOT_ELIGIBLE, ERROR, COMPAT, SIGNED_OUT never show here.
+        return None
 
     epic._first_visible = fake_first_visible
 
@@ -140,38 +146,67 @@ async def main() -> int:
         pass
 
     epic._goto = _nogoto
-    runner.asyncio.sleep = lambda _s: asyncio.sleep(0)  # don't wait out the poll
 
-    notified: list[tuple[str, str | None]] = []
-    runner.notify.send_soon = lambda kind, note: notified.append((kind, note.image_path))
 
+def _adapter() -> epic.EpicAdapter:
     adapter = epic.EpicAdapter()
 
     async def _noshot(page, offer, tag):
         return f"{tag}.png"
 
     adapter._shot = _noshot
+    return adapter
 
-    offer = FreeOffer(
-        external_id="x",
+
+def _offer() -> FreeOffer:
+    return FreeOffer(
+        external_id="ns:oid",
         title="Caravan SandWitch",
-        url=None,
+        url="https://store.epicgames.com/p/caravan",
         extra={"namespace": "ns", "offer_id": "oid", "account_id": 1},
     )
-    waiter = runner._CaptchaWaiter(1, "spillebulle", "Epic Games Store")
-    result = await adapter.claim(FakePage(), offer, waiter=waiter)
 
+
+async def _happy_path() -> bool:
+    """No captcha: ORDER then ACCEPT then claimed, order clicked exactly once."""
+    state = {"stage": "order", "clicks": []}
+    _install_stubs(state, with_captcha=False)
+    result = await _adapter().claim(FakePage(), _offer(), waiter=None)
     ok = True
-    print("outcome:", result.outcome, "| clicks:", state["clicks"])
-    print("notified:", notified)
+    print("no-captcha outcome:", result.outcome, "| clicks:", state["clicks"])
     if result.outcome != "claimed":
         print("FAIL: expected claimed"); ok = False
     if state["clicks"] != ["ORDER", "ACCEPT"]:
-        print("FAIL: expected exactly ORDER then ACCEPT - a third ORDER click means the",
-              "loop re-submitted the order behind the dialog (the 'error occurred' bug)."); ok = False
-    if not any(k == "attention" and img and "captcha" in img for k, img in notified):
-        print("FAIL: expected a captcha notification with the screenshot attached"); ok = False
-    ok = ok and ok_priority
+        print("FAIL: expected exactly ORDER then ACCEPT - a second ORDER click",
+              "means the loop re-submitted the order behind the dialog."); ok = False
+    return ok
+
+
+async def _captcha_path() -> bool:
+    """A captcha: stops with CheckoutBlocked, names the offer, no false claim."""
+    state = {"stage": "order", "clicks": []}
+    _install_stubs(state, with_captcha=True)
+    offer = _offer()
+    try:
+        result = await _adapter().claim(FakePage(), offer, waiter=None)
+    except CheckoutBlocked as exc:
+        print("captcha outcome: CheckoutBlocked | offer_id:", exc.offer_id,
+              "| clicks:", state["clicks"])
+        ok = True
+        if exc.offer_id != offer.external_id:
+            print("FAIL: CheckoutBlocked did not name the offer it blocked on"); ok = False
+        if state["clicks"] != ["ORDER"]:
+            print("FAIL: expected a single ORDER click before stopping, got",
+                  state["clicks"]); ok = False
+        return ok
+    print("FAIL: a checkout captcha must raise CheckoutBlocked, got", result.outcome)
+    return False
+
+
+async def main() -> int:
+    ok = await _priority_check()
+    ok = await _happy_path() and ok
+    ok = await _captcha_path() and ok
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 

@@ -364,18 +364,58 @@ image_path`, uploaded to Discord as a multipart file because Discord fetches
 URLs from its own side and cannot see a local one; context, not a puzzle to
 solve). If nobody comes, the wait times out to `NeedsAttention` as before.
 
-**The open question is whether Talon accepts a human solve in the driven
-browser at all.** The live view could not pass an interactive challenge because
-`Page.startScreencast` is a loud CDP signal and `cdpDetected` is then true. A
-watched run is different in the one way that might matter: it is shown over
-**VNC (pixels off the X server), not a screencast**, so during the solve
-Playwright is doing nothing over CDP and the page's automation tells
-(`navigator.webdriver` false, no `Runtime.enable` console leak on Chrome 151 -
-both measured) are quiet. So it is a real shot where the live view was not - but
-it is unproven, and if Talon still refuses the driven browser the reliable
-fallback is finishing the checkout in the **un-driven** window (no CDP at all,
-the same browser that already passes the sign-in challenge). Not built yet;
-build it only if a watched solve is shown to fail.
+**Superseded for Epic (0.1.19):** the paragraph above describes the general
+captcha-pause the `_CaptchaWaiter` provides, and it is how the app *tried* to
+answer Epic's checkout captcha - a solve on the driven screen. That solve is now
+proven not to work (`confirm-order` returns `epic.error.captcha.challenge.failed`;
+see below), so `epic._handle_challenge` no longer waits on the waiter: it raises
+`CheckoutBlocked` and the person finishes in the un-driven window instead. The
+waiter machinery stays in `runner.py` for any future store where a driven solve
+might work, but Epic does not use it, so `waiting_for_captcha` and the "Solve
+the captcha" jump-in button do not light up for Epic.
+
+**Talon does NOT accept a human solve in the driven browser. Proven, and it
+settles the open question (0.1.19).** A person solved Epic's checkout captcha in
+a watched run - shown over **VNC (pixels off the X server), not a screencast**,
+so during the solve Playwright is doing nothing over CDP and the page's
+automation tells (`navigator.webdriver` false, no `Runtime.enable` console leak
+on Chrome 151) are quiet. It made no difference. The order request that follows
+the solve returns, measured from a real account:
+
+```
+POST https://payment-website-pci.ol.epicgames.com/v2/purchase/confirm-order
+  -> HTTP 400   captcha-token-in-request=True
+  {"errorCode":"epic.error.captcha.challenge.failed", ...}
+```
+
+The token **was** attached (the solve produced one); Epic rejected it. `400`,
+not `403` - the browser is not blocked outright, its *captcha solve* is refused,
+because Talon scored the environment as automated. `cdpDetected` is true and a
+run cannot exist without CDP attached, so this is structural, exactly as the
+live view's version of it was. A human solve in the driven browser is a dead
+end for checkout; do not try to make it pass, and do not confuse the `400`
+(solve refused) with a `403` (would be a hard block).
+
+**So the fallback CLAUDE.md reserved is now built: finish the checkout in the
+un-driven window.** When Epic raises a captcha at checkout, `epic._handle_challenge`
+no longer waits for a driven solve (`_CaptchaWaiter`, now unused by Epic) - it
+raises `browser.CheckoutBlocked`, a `NeedsAttention` subclass carrying the
+offer's id. The runner records `account.checkout_offer` and files the account
+with the remedy, and the account page shows a primary **"Finish the claim
+here"** button. That button (`POST /api/accounts/{id}/finish-claim`) opens the
+account's profile in the **same un-driven window as sign-in** (`manager.open_local`,
+holder "a sign-in window", no CDP), only pointed at the offer's
+`/purchase?offers=…` page via `adapter.checkout_url`. The person presses "Add
+to library", answers the captcha and accepts *in the browser Epic's captcha
+already trusts*, and closes the window. `runner.verify_checkout` then asks the
+store whether it worked (one `is_owned` load, no assuming), writes a `claimed`
+ledger row and clears `checkout_offer` if so, or leaves the button in place to
+retry if not. On a desktop the window is in front of the person; in a container
+it is on the Xvfb and they work it through the screen view - the exact machinery
+sign-in already uses, copy aside. `checkout_pending` on the account read drives
+the button. **Built, and the claim-sim covers both branches (no-captcha ->
+claimed, captcha -> CheckoutBlocked); the end-to-end un-driven claim is not yet
+reported from a real account.**
 
 **The checkout is a phase-aware loop (`epic._drive_checkout`).** Epic
 interleaves the steps differently per title and a captcha can land between any
@@ -389,10 +429,13 @@ it clicks the add-to-library button *once* (`PLACE_ORDER`); a consent dialog
 is answered whenever it appears; and once the order is placed it **never touches
 the add-to-library button again** - it only answers a dialog, surfaces an
 `ERROR` toast as `NeedsAttention` (with a screenshot), or waits for
-`CONFIRMED`/`OWNED`. `tools/checkout_sim.py` proves the order button is clicked
-exactly once even while it lingers in a "processing" state. The captcha and the
-"I accept" step are seen against a real account; a confirmed end-to-end claim is
-still to be reported.
+`CONFIRMED`/`OWNED`. `tools/checkout_sim.py` proves both branches: a no-captcha
+checkout clicks the order button exactly once even while it lingers in a
+"processing" state, and a checkout captcha raises `CheckoutBlocked` (naming the
+offer) rather than hammering the button or reporting a false claim. The captcha
+and the "I accept" step are seen against a real account; a confirmed end-to-end
+claim is still to be reported - now via the un-driven window (above), since the
+driven checkout cannot pass Epic's captcha.
 
 **The checkout is the live-fix surface.** `adapters/epic.PLACE_ORDER` (and
 AGREEMENT, CONFIRMED, OWNED) are a deliberately long list of selectors because
@@ -688,6 +731,13 @@ session trusting something nobody has run.
   drag or `selectstart` is started.
 - That a *fresh* profile is let through Epic's interstitial where an older one
   on the same machine is not.
+- **That Epic refuses a checkout-captcha solve done in the driven browser**, by
+  the `confirm-order` response captured from a real account: `HTTP 400
+  epic.error.captcha.challenge.failed`, with the token present. This is what
+  the whole un-driven "Finish the claim here" path exists to answer, and it is
+  the first hard measurement that the driven browser cannot complete a checkout
+  that raises a captcha - a person clicking honestly on the screen does not
+  change it.
 - **That the bundled Chromium is the reason a captcha could not be answered**,
   by reading the codec support of both browsers directly, and that with real
   Chrome the store loads with no interstitial at all. The console lines that
@@ -789,21 +839,28 @@ truth, because the confirmation wording is unknown and a missing banner is not
 proof of failure. Seen but not on the free game: a "not compatible with your
 device" notice with a "Continue" (the store's own "Get" flow shows it), stepped
 past best-effort by `COMPAT_CONTINUE`. Verified from a watched run's screenshot;
-the click-through to a confirmed claim is the last unproven step - see below.
+the click-through in the *driven* browser then hit the captcha wall below.
+
+**The driven click was tried, and Epic's captcha refused it (0.1.19).** "Add to
+library" was clicked, Talon raised a captcha, a person solved it on the screen,
+and `confirm-order` returned `400 epic.error.captcha.challenge.failed` with the
+token attached. So the driven-browser checkout is settled: it reaches the order
+and cannot complete it, and the remedy is the un-driven "Finish the claim here"
+window. See the two paragraphs on it above.
 
 **Written and NOT verified:**
 
-- **The last checkout step: the click, and confirmation.** The button is
-  now known (`Add to library`, verified from a real checkout), and the run
-  reaches it. What has *not* been seen through is clicking it and reading a
-  confirmed claim back - the user interrupted before the click. So the click,
-  the confirmation wording, and the ownership fallback are all still unproven
-  against a real account. Safe by construction: an unrecognised page raises
-  `NeedsAttention` with a screenshot rather than clicking something else.
-- **The claim itself, on a real account.** Everything up to the checkout is now
-  proven against a live signed-in session. `PLACE_ORDER`, `AGREEMENT`,
-  `CONFIRMED` and the rest have still never run, so the first real claim is
-  where they get corrected.
+- **The un-driven claim, end to end.** The button, the window on the checkout
+  page, and `verify_checkout` are built and the sim covers the branch, but a
+  real account pressing "Add to library" in the un-driven window and Trove then
+  reading the game in the library has not been reported. This is the last
+  unproven step of the whole claim, and the un-driven window is the same one
+  that already passes sign-in, so the odds are good - but it is unproven.
+- **The confirmation wording / ownership fallback.** `verify_checkout` trusts
+  `is_owned` (the product page's "In Library" marker) as ground truth after the
+  window closes; `CONFIRMED` in the driven flow is now moot for Epic, since the
+  driven flow stops at the captcha. Whether `is_owned` reliably flips to True
+  right after a hand-finished order is unproven and is the first thing to check.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in

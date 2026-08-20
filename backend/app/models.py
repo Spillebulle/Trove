@@ -124,6 +124,13 @@ class Account(Base):
     login_email = Column(Text, nullable=True)
     login_password = Column(Text, nullable=True)
 
+    # The external id of an offer whose checkout stopped on a captcha the driven
+    # browser cannot pass, so it must be finished in the un-driven sign-in
+    # window. Set when a run raises `CheckoutBlocked`, cleared the moment the
+    # account is confirmed to own that offer. It is what lights the "Finish the
+    # claim here" button, so it names the exact offer that window should open on.
+    checkout_offer = Column(String(200), nullable=True)
+
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 

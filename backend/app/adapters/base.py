@@ -130,6 +130,18 @@ class BaseAdapter(ABC):
     @property
     def sign_in_page(self) -> str:
         return self.signin_url or self.login_url
+
+    def checkout_url(self, offer: "FreeOffer") -> str | None:
+        """The page a person opens to finish this offer's checkout by hand.
+
+        Returned to the un-driven sign-in window when a run stops with
+        `CheckoutBlocked` - a captcha the driven browser cannot pass. `None`
+        (the default) means the store has no such fallback, so the interface
+        offers nothing it cannot honour. A store that overrides this returns the
+        checkout URL for the *specific* offer, so the window opens straight on
+        the order rather than on the shop front.
+        """
+        return None
     # A sentence for the add-account page saying what this adapter does and
     # does not do.
     blurb: str = ""

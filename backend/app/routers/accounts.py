@@ -22,8 +22,15 @@ from ..browser import (
 from ..config import get_settings
 from ..crypto import decrypt, encrypt, totp_code
 from ..db import get_db
-from ..models import Account, Claim
-from ..runner import check_session, is_awaiting_captcha, release_watch, run_account
+from ..models import Account, Claim, Offer
+from ..runner import (
+    _free_offer_from_row,
+    check_session,
+    is_awaiting_captcha,
+    release_watch,
+    run_account,
+    verify_checkout,
+)
 from ..schemas import AccountCreate, AccountRead, AccountUpdate, TypeRequest
 from ..timeutil import utcnow
 
@@ -55,6 +62,7 @@ def serialise(db: Session, account: Account) -> AccountRead:
         next_run_at=account.next_run_at,
         has_totp=bool(account.totp_secret),
         waiting_for_captcha=is_awaiting_captcha(account.id),
+        checkout_pending=bool(account.checkout_offer),
         login_email=decrypt(account.login_email) if account.login_email else None,
         has_login_password=bool(account.login_password),
         notes=account.notes,
@@ -278,6 +286,80 @@ async def sign_in_here(account_id: int, db: Session = Depends(get_db)) -> Accoun
 
     try:
         await manager.open_local(account.id, profile, adapter.sign_in_page, on_closed=_verify)
+    except ProfileBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except NoLocalBrowser as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    db.refresh(account)
+    return serialise(db, account)
+
+
+@router.post("/{account_id}/finish-claim", response_model=AccountRead)
+async def finish_claim(account_id: int, db: Session = Depends(get_db)) -> AccountRead:
+    """Open the un-driven window on the checkout page to finish a blocked claim.
+
+    The answer to Epic's checkout captcha, which the driven browser cannot pass:
+    a human solve in the automated browser is rejected at the order step
+    (`epic.error.captcha.challenge.failed`), because the browser is refused for
+    being automated. So this opens the account's own profile in a plain Chrome
+    window with nothing attached to it - the browser Epic's captcha does accept,
+    the same one sign-in uses - straight on the offer's checkout page. The
+    person presses "Add to library", answers the captcha, accepts, and closes
+    the window; Trove then asks the store whether it worked and records it.
+
+    Like "Sign in here": on a desktop the window is in front of the person, in a
+    container it is on Trove's own display and they work it through the screen
+    view. Nothing is driven either way.
+    """
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if account is None:
+        raise HTTPException(404, "No such account.")
+    if not account.checkout_offer:
+        raise HTTPException(
+            409, "There is no checkout waiting to be finished for this account."
+        )
+    if not (settings.has_visible_desktop or settings.has_screen_view):
+        raise HTTPException(
+            409,
+            "Trove has no screen to open a browser window on. Finish the claim "
+            "on a desktop with a copy of the profile, or use the live view.",
+        )
+
+    adapter = get_adapter(account.store)
+    row = (
+        db.query(Offer)
+        .filter(Offer.store == account.store, Offer.external_id == account.checkout_offer)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(409, "That offer is no longer listed, so there is nothing to finish.")
+    url = adapter.checkout_url(_free_offer_from_row(row))
+    if not url:
+        raise HTTPException(409, "This store has no by-hand checkout to finish.")
+
+    profile = settings.profiles_path / account.profile_path
+    label, store = account.label, account.store
+
+    async def _verify() -> None:
+        """When the window closes, ask the store whether the order landed."""
+        ok, sentence = await verify_checkout(account_id)
+        # verify_checkout already announces a claim on success; only the
+        # "could not confirm" case needs a nudge here, for a person who walked
+        # away before it finished.
+        if not ok:
+            await notify.send(
+                "attention",
+                notify.Notification(
+                    title=f"{label}: checkout not confirmed",
+                    detail=sentence,
+                    severity="caution",
+                    context=store,
+                ),
+            )
+
+    try:
+        await manager.open_local(account.id, profile, url, on_closed=_verify)
     except ProfileBusy as exc:
         raise HTTPException(409, str(exc)) from exc
     except NoLocalBrowser as exc:

@@ -83,6 +83,7 @@ def _migrate(engine) -> None:
         "accounts": {
             "login_email": "TEXT",
             "login_password": "TEXT",
+            "checkout_offer": "VARCHAR(200)",
         },
     }
     with engine.begin() as conn:

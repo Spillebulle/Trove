@@ -48,6 +48,12 @@ export interface Account {
   has_totp: boolean
   /** A watched run is paused on a captcha, waiting for you on the screen. */
   waiting_for_captcha: boolean
+  /**
+   * A run stopped at a checkout captcha the driven browser cannot pass, so an
+   * offer is waiting to be finished by hand in the un-driven sign-in window.
+   * Drives the "Finish the claim here" button.
+   */
+  checkout_pending: boolean
   /** The stored sign-in email, if any; the password only as a yes/no. */
   login_email: string | null
   has_login_password: boolean

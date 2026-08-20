@@ -108,6 +108,9 @@ export const api = {
     clearAttention: (id: number) => post<Account>(`/api/accounts/${id}/clear-attention`),
     resetProfile: (id: number) => post<Account>(`/api/accounts/${id}/reset-profile`),
     signInHere: (id: number) => post<Account>(`/api/accounts/${id}/sign-in-here`),
+    // Open the un-driven window on the checkout page to finish a claim the
+    // driven browser could not, because of a captcha it cannot pass.
+    finishClaim: (id: number) => post<Account>(`/api/accounts/${id}/finish-claim`),
     checkSession: (id: number) => post<Account>(`/api/accounts/${id}/check-session`),
     canSignInHere: (id: number) =>
       request<{ ok: boolean; via: 'desktop' | 'screen' | null; reason: string | null }>(

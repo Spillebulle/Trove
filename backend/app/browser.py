@@ -285,6 +285,30 @@ class NeedsAttention(Exception):
         self.screenshot = screenshot
 
 
+class CheckoutBlocked(NeedsAttention):
+    """The checkout hit a captcha the *driven* browser cannot pass.
+
+    A distinct stop, because it has a distinct remedy. Epic raises a Talon
+    captcha at "Add to library", and a human solve performed in the
+    CDP-driven browser is *rejected* at the order step - proven, Aug 2026:
+    ``confirm-order`` returns HTTP 400 ``epic.error.captcha.challenge.failed``
+    with the token attached. The browser is refused for being automated, and no
+    amount of honest clicking changes that.
+
+    So this is not "solve it on the screen" (that is the driven browser, which
+    fails). It is "finish this one order in the **un-driven** window" - the same
+    plain Chrome that already passes the sign-in challenge, with no CDP on it.
+    It carries the offer's external id so the interface can open that window
+    straight on the checkout page.
+    """
+
+    def __init__(
+        self, reason: str, screenshot: str | None = None, offer_id: str | None = None
+    ) -> None:
+        super().__init__(reason, screenshot)
+        self.offer_id = offer_id
+
+
 def profile_dir_for(account_id: int, label: str) -> str:
     """The directory name for an account's profile, relative to the root.
 

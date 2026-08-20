@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from . import notify
 from .adapters import FreeOffer, get_adapter
 from .browser import (
+    CheckoutBlocked,
     NeedsAttention,
     ProfileBusy,
     first_page,
@@ -327,6 +328,127 @@ async def check_session(account_id: int) -> tuple[bool, str]:
         db.close()
 
 
+def _free_offer_from_row(row: Offer) -> FreeOffer:
+    """Rebuild the adapter's offer from a stored `offers` row.
+
+    The DB keeps the offer flat; the adapter wants a `FreeOffer` with the
+    namespace and id in `extra`. Epic's `external_id` is `namespace:offerId`,
+    which is where those come back from.
+    """
+    namespace, _, offer_id = (row.external_id or "").partition(":")
+    return FreeOffer(
+        external_id=row.external_id,
+        title=row.title,
+        url=row.url,
+        image_url=row.image_url,
+        kind=row.kind,
+        extra={"namespace": namespace, "offer_id": offer_id},
+    )
+
+
+async def verify_checkout(account_id: int) -> tuple[bool, str]:
+    """After the un-driven checkout window closes, confirm the order and record it.
+
+    The other half of "Finish the claim here", and the same discipline as the
+    sign-in check: the person finishes the order in a window Trove has no
+    connection to, so Trove cannot know it worked - it has to ask the store.
+    One page load, `is_owned`, and a ledger row only if the account now really
+    owns it. A checkout that did not complete leaves the pending marker in
+    place, so the button stays and the person can try again.
+    """
+    db = SessionLocal()
+    try:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if account is None:
+            raise ValueError(f"No account with id {account_id}")
+        external_id = account.checkout_offer
+        if not external_id:
+            return False, "There was no checkout waiting to be confirmed."
+        store = account.store
+        adapter = get_adapter(store)
+        store_name = adapter.display_name
+        label = account.label
+        row = _offer_row(db, store, external_id)
+        if row is None:
+            account.checkout_offer = None
+            db.commit()
+            return False, "That offer is no longer listed, so there is nothing to confirm."
+        offer = _free_offer_from_row(row)
+        offer.extra["account_id"] = account.id
+        profile_path = settings.profiles_path / account.profile_path
+
+        run = Run(account_id=account.id, store=store, trigger="checkout", status="running")
+        db.add(run)
+        db.commit()
+        started = utcnow()
+        owned: bool | None = None
+        shot: str | None = None
+        try:
+            async with manager.session(
+                account.id, profile_path, holder="a checkout check", wait_s=5.0
+            ) as context:
+                page = await first_page(context)
+                owned = await adapter.is_owned(page, offer)
+                if owned is not True:
+                    shot = await screenshot(
+                        page, screenshot_name(account.id, store, "checkout-check")
+                    )
+        except ProfileBusy as exc:
+            run.status = "failed"
+            run.message = str(exc)
+            run.finished_at = utcnow()
+            run.duration_s = (run.finished_at - started).total_seconds()
+            db.commit()
+            return False, str(exc)
+
+        if owned is True:
+            _record(
+                db,
+                account,
+                run,
+                row,
+                outcome="claimed",
+                detail="Added to your library — finished by hand in the sign-in window.",
+            )
+            run.claimed += 1
+            run.status = "ok"
+            account.checkout_offer = None
+            _set_status(db, account, "ok", None, None)
+            run.finished_at = utcnow()
+            run.duration_s = (run.finished_at - started).total_seconds()
+            account.last_run_at = run.finished_at
+            db.commit()
+            notify.send_soon(
+                "claimed",
+                notify.Notification(
+                    title=row.title,
+                    detail="Added to your library — finished in the sign-in window.",
+                    severity="good",
+                    context=f"{store_name} · {label}",
+                    url=row.url,
+                    image_url=row.image_url,
+                ),
+            )
+            return True, f"{row.title} is in your library."
+
+        # Could not confirm. Keep the marker so the button stays; say so plainly.
+        reason = (
+            "The checkout window closed, but Trove could not confirm the game "
+            "landed in the library. If you did finish the order, press “Check "
+            "again” in a moment; if you did not, press “Finish the claim "
+            "here” to reopen the window."
+        )
+        run.status = "attention"
+        run.message = reason
+        run.finished_at = utcnow()
+        run.duration_s = (run.finished_at - started).total_seconds()
+        _set_status(db, account, "needs_attention", reason, shot)
+        db.commit()
+        return False, reason
+    finally:
+        db.close()
+
+
 async def run_account(account_id: int, trigger: str = "schedule", watch: bool = False) -> int:
     """Run one account once. Returns the run id.
 
@@ -357,6 +479,30 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             run.status = "failed"
             run.message = str(exc)
             logger.info("Run %s skipped: %s", run_id, exc)
+        except CheckoutBlocked as exc:
+            # A captcha the driven browser cannot pass. This is not a failure to
+            # fix in the selectors: it is the automation wall, and the remedy is
+            # the un-driven window. Remember which offer, so the account page can
+            # open that window straight on its checkout.
+            run.status = "attention"
+            run.message = exc.reason
+            account.checkout_offer = exc.offer_id
+            _set_status(db, account, "needs_attention", exc.reason, exc.screenshot)
+            image_path = (
+                str(settings.screenshots_path / exc.screenshot)
+                if exc.screenshot
+                else None
+            )
+            notify.send_soon(
+                "attention",
+                notify.Notification(
+                    title=f"{label}: finish the claim in the sign-in window",
+                    detail=exc.reason,
+                    severity="caution",
+                    context=store_name,
+                    image_path=image_path,
+                ),
+            )
         except NeedsAttention as exc:
             run.status = "attention"
             run.message = exc.reason
@@ -503,6 +649,8 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
                 detail="Already in your library.",
             )
             run.already_owned += 1
+            if account.checkout_offer == offer.external_id:
+                account.checkout_offer = None  # finished elsewhere; it is done
             db.commit()
             continue
 
@@ -518,6 +666,10 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
             key_store=result.key_store,
             shot=result.screenshot,
         )
+        if result.outcome in ("claimed", "already_owned") and (
+            account.checkout_offer == offer.external_id
+        ):
+            account.checkout_offer = None  # the block is resolved
         if result.outcome == "claimed":
             run.claimed += 1
             notify.send_soon(

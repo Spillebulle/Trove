@@ -50,6 +50,10 @@ export function AccountDetail() {
   // The container's screen, for a sign-in window opened there. See
   // `components/ScreenView.tsx` for why it is a different thing from the live view.
   const [screenOpen, setScreenOpen] = useState(false)
+  // The screen dialog is open to *finish a checkout* (un-driven window on the
+  // purchase page), not to sign in. Only the copy differs; the mechanics are
+  // the same window and the same close-and-check.
+  const [finishing, setFinishing] = useState(false)
   // A live line of what the assisted sign-in is doing, shown over the screen.
   const [signInStep, setSignInStep] = useState<string | null>(null)
   // Watching a run on the container's screen.
@@ -162,9 +166,35 @@ export function AccountDetail() {
     onSuccess: () => {
       if (localSignIn.data?.via === 'screen') {
         // The window opened on Trove's own screen, so show it.
+        setFinishing(false)
         setScreenOpen(true)
       } else {
         push('A browser window is opening. Sign in, then close it.', 'good')
+      }
+      refresh()
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  // Finishing a claim the driven browser could not, because of a captcha it
+  // cannot pass. It opens the *same* un-driven window as sign-in (holder "a
+  // sign-in window"), only pointed at the checkout page, so the screen dialog,
+  // the close button and the after-close check are all shared - the only
+  // difference is what the person does in the window and what the copy says.
+  const finishClaim = useMutation({
+    mutationFn: () => api.accounts.finishClaim(accountId),
+    onSuccess: () => {
+      if (localSignIn.data?.via === 'screen') {
+        setFinishing(true)
+        setSignInStep(
+          'Press “Add to library”, answer the captcha, accept — then press Done.',
+        )
+        setScreenOpen(true)
+      } else {
+        push(
+          'A browser window is opening on the checkout page. Add the game to your library, then close it.',
+          'good',
+        )
       }
       refresh()
     },
@@ -227,7 +257,13 @@ export function AccountDetail() {
     mutationFn: () => api.accounts.closeSignIn(accountId),
     onSuccess: () => {
       setScreenOpen(false)
-      push('The window is closing. Trove will check the session in a moment.', 'good')
+      push(
+        finishing
+          ? 'The window is closing. Trove will check whether the game landed in your library.'
+          : 'The window is closing. Trove will check the session in a moment.',
+        'good',
+      )
+      setFinishing(false)
       refresh()
     },
     onError: (error: Error) => push(error.message, 'critical'),
@@ -342,6 +378,31 @@ export function AccountDetail() {
         }
         actions={
           <>
+            {/*
+             * A claim the driven browser could not finish, because Epic put up
+             * a captcha it cannot pass. This opens the un-driven window straight
+             * on the checkout page - the browser the captcha accepts - so the
+             * person clicks "Add to library" and answers it there. Primary and
+             * first, because when it is showing it is the one thing to do.
+             */}
+            {data.checkout_pending && localSignIn.data?.ok && (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => finishClaim.mutate()}
+                disabled={busy || finishClaim.isPending}
+                title={
+                  busy
+                    ? `The browser profile is in use by ${data.busy_with}.`
+                    : localSignIn.data.via === 'screen'
+                      ? 'Open the checkout in a normal browser window on Trove’s screen and finish it there.'
+                      : 'Open the checkout in a normal browser window on this machine and finish it there.'
+                }
+              >
+                {finishClaim.isPending ? <Spinner /> : <ExternalLink className="size-icon" />}
+                Finish the claim here
+              </button>
+            )}
             {/*
              * The primary way in, where the machine can manage it. It opens an
              * ordinary browser window with no automation attached, which is the
@@ -859,10 +920,15 @@ export function AccountDetail() {
         open={screenOpen}
         onClose={() => {
           setScreenOpen(false)
+          setFinishing(false)
           refresh()
         }}
         title={`${data.label} on Trove's screen`}
-        subtitle="A normal browser window, opened inside the container with nothing attached to it."
+        subtitle={
+          finishing
+            ? 'The checkout, in a normal browser window with nothing attached to it — the one Epic’s captcha accepts. Add the game to your library, answer the captcha, then press Done.'
+            : 'A normal browser window, opened inside the container with nothing attached to it.'
+        }
         size="large"
       >
         <div className="h-[74vh] min-h-[420px]">
@@ -872,6 +938,7 @@ export function AccountDetail() {
               onClose={() => {
                 setScreenOpen(false)
                 setSignInStep(null)
+                setFinishing(false)
                 refresh()
               }}
               footer={
