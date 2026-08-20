@@ -624,7 +624,14 @@ session trusting something nobody has run.
   Epic's challenge, run marked `attention`, account marked with a reason and a
   screenshot, no retry. This is the design working, not failing.
 - Notifications: both payload shapes, the 404 / unreachable / no-URL branches,
-  and that a saved webhook is never returned to the browser.
+  and that a saved webhook is never returned to the browser. The Discord side
+  is a branded rich embed - the webhook wears Trove's avatar and name
+  (`username`/`avatar_url`), a colour per severity, an author row with the mark,
+  and for a claim the game as the linked title with its poster as the embed
+  image and the store and account in the footer. The avatar and author/footer
+  icons are `docs/brand/avatar.png` fetched over a raw GitHub URL (Discord
+  fetches images from its own side, so a local path cannot work). Payload
+  validated and a rendered mock reviewed; not yet sent to a live webhook.
 - Both themes, and the drawer below 1024px.
 - The mouse bridge, by replaying both payload shapes against a page that logs
   its own events: moves are hovers, the press produces one trusted click, and no

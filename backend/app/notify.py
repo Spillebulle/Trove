@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 
@@ -54,6 +55,16 @@ _COLOUR = {
 
 _TIMEOUT = httpx.Timeout(10.0)
 
+# The webhook wears Trove's face. `username` and `avatar_url` override whatever
+# the webhook was named when it was made, so a message in the channel is
+# unmistakably from this app rather than from "Captain Hook" with a default
+# avatar. The avatar is the app icon in the repo, which Discord fetches once and
+# caches; a public raw URL because Discord fetches it from its own side and has
+# no access to the self-hosted instance.
+BRAND_NAME = "Trove"
+BRAND_URL = "https://github.com/Spillebulle/Trove"
+BRAND_ICON = "https://raw.githubusercontent.com/Spillebulle/Trove/main/docs/brand/avatar.png"
+
 
 @dataclass(slots=True)
 class Notification:
@@ -67,20 +78,43 @@ class Notification:
     context: str | None = None
     # A link the message should point at, when there is a page worth opening.
     url: str | None = None
+    # The game's poster, shown large in a Discord embed - what makes a claim
+    # look like a claim rather than a log line. A public URL (the store's own
+    # CDN); a local screenshot path would not work, because Discord fetches the
+    # image itself and cannot reach this machine.
+    image_url: str | None = None
+    # A smaller image, shown in the corner, when a big one would be too much.
+    thumbnail_url: str | None = None
 
 
 def _discord_payload(note: Notification) -> dict:
+    """A rich embed wearing the app's colours, with the poster when there is one.
+
+    The shape: an author row carrying the mark and the app name, the title
+    (linked when there is a page), the sentence as the description, the game's
+    poster as the embed image, and a footer naming the account with the time.
+    Every message is stamped so the channel reads as a timeline.
+    """
     embed: dict = {
-        "title": note.title,
         "color": _COLOUR.get(note.severity, _COLOUR["info"]),
+        "author": {"name": BRAND_NAME, "url": BRAND_URL, "icon_url": BRAND_ICON},
+        "title": note.title,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "footer": {"text": note.context or BRAND_NAME, "icon_url": BRAND_ICON},
     }
     if note.detail:
         embed["description"] = note.detail
     if note.url:
         embed["url"] = note.url
-    footer = "Trove" if not note.context else f"Trove . {note.context}"
-    embed["footer"] = {"text": footer}
-    return {"embeds": [embed]}
+    if note.image_url:
+        embed["image"] = {"url": note.image_url}
+    elif note.thumbnail_url:
+        embed["thumbnail"] = {"url": note.thumbnail_url}
+    return {
+        "username": BRAND_NAME,
+        "avatar_url": BRAND_ICON,
+        "embeds": [embed],
+    }
 
 
 def _plain_payload(note: Notification) -> dict:
@@ -97,6 +131,7 @@ def _plain_payload(note: Notification) -> dict:
         "severity": note.severity,
         "context": note.context,
         "url": note.url,
+        "image_url": note.image_url,
     }
 
 

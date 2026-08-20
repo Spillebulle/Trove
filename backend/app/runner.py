@@ -264,6 +264,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
         if account is None:
             raise ValueError(f"No account with id {account_id}")
         store = account.store
+        store_name = get_adapter(store).display_name
         label = account.label
         profile_path = settings.profiles_path / account.profile_path
 
@@ -291,7 +292,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                     title=f"{label} needs a hand",
                     detail=exc.reason,
                     severity="caution",
-                    context=store,
+                    context=store_name,
                 ),
             )
         except asyncio.CancelledError:
@@ -309,7 +310,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                     title=f"{label} could not be checked",
                     detail=run.message,
                     severity="critical",
-                    context=store,
+                    context=store_name,
                 ),
             )
         else:
@@ -330,7 +331,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                         f"owned, out of {run.offers_seen} free right now."
                     ),
                     severity="good",
-                    context=store,
+                    context=store_name,
                 ),
             )
         return run_id
@@ -443,11 +444,15 @@ async def _run_claims(db, account, run, adapter, page, pending) -> None:
             notify.send_soon(
                 "claimed",
                 notify.Notification(
-                    title=f"Claimed {row.title}",
-                    detail=result.detail or f"Added to {account.label}.",
+                    # The game is the headline and its poster is the picture;
+                    # the store and account go in the footer. A claim should
+                    # look like the thing it is, not like a log line.
+                    title=row.title,
+                    detail=result.detail or "Added to your library.",
                     severity="good",
-                    context=f"{store} . {account.label}",
+                    context=f"{adapter.display_name} · {account.label}",
                     url=row.url,
+                    image_url=row.image_url,
                 ),
             )
         elif result.outcome == "already_owned":
