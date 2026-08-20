@@ -418,12 +418,39 @@ class EpicAdapter(BaseAdapter):
 
         def _on_response(response) -> None:
             try:
-                if response.status >= 400 and _is_epic_backend(response.url):
-                    where = response.url.split("?", 1)[0]
-                    msg = f"{response.request.method} {where} -> HTTP {response.status}"
-                    net_errors.append(msg)
-                    logger.warning("Epic backend request error: %s", msg)
+                if response.status < 400 or not _is_epic_backend(response.url):
+                    return
             except Exception:  # a response object mid-teardown is not worth failing on
+                return
+            request = response.request
+            where = response.url.split("?", 1)[0]
+            net_errors.append(f"{request.method} {where} -> HTTP {response.status}")
+
+            async def _detail() -> None:
+                # Epic's *response* body is its own error message (not a secret),
+                # and it says WHY a 400 is a 400 - a captcha it rejected, a field
+                # it wanted. Whether the *request* carried a captcha token is the
+                # other half; we log the yes/no, never the token itself.
+                try:
+                    body = (await response.text())[:400]
+                except Exception:
+                    body = "<body unavailable>"
+                token_sent = False
+                try:
+                    post = request.post_data or ""
+                    token_sent = any(
+                        k in post.lower() for k in ("captcha", "talon", "token", "arkose")
+                    )
+                except Exception:
+                    pass
+                logger.warning(
+                    "Epic backend %s %s -> HTTP %s | captcha-token-in-request=%s | response: %s",
+                    request.method, where, response.status, token_sent, body,
+                )
+
+            try:
+                asyncio.get_event_loop().create_task(_detail())
+            except Exception:
                 pass
 
         page.on("requestfailed", _on_request_failed)
