@@ -113,6 +113,12 @@ export function ScreenView({
 
   return (
     <div className="flex h-full flex-col gap-3">
+      {status && phase === 'live' && (
+        <div className="flex items-center gap-2 rounded-control border border-line-soft bg-raised px-3 py-2 text-small text-fg">
+          <Spinner />
+          <span className="min-w-0">{status}</span>
+        </div>
+      )}
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-control bg-sunk">
         {/* noVNC owns this element: it appends its own canvas and sizes it. */}
         <div ref={hostRef} className="absolute inset-0" />
@@ -122,15 +128,6 @@ export function ScreenView({
             <span className="flex items-center gap-2 text-body text-dim">
               <Spinner />
               Connecting to Trove&rsquo;s screen.
-            </span>
-          </div>
-        )}
-
-        {status && phase === 'live' && (
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3">
-            <span className="flex items-center gap-2 rounded-control bg-raised px-3 py-1.5 text-small text-fg shadow-e2">
-              <Spinner />
-              {status}
             </span>
           </div>
         )}
