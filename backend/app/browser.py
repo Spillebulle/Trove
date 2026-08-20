@@ -52,7 +52,14 @@ from playwright.async_api import (
 )
 
 from .config import get_settings
+from .keyboard import window_titles
 from .timeutil import utcnow
+
+# How many two-second polls the un-driven checkout window must show no visible
+# browser window before Trove treats the checkout as finished and closes it.
+# Long enough that a moment between pages is never mistaken for the end, short
+# enough that nobody sits looking at a black screen wondering.
+BLANK_POLLS_BEFORE_FINISH = 4
 
 logger = logging.getLogger(__name__)
 
@@ -612,7 +619,12 @@ class BrowserManager:
             entry.lock.release()
 
     async def open_local(
-        self, account_id: int, profile_path: Path, url: str, on_closed=None
+        self,
+        account_id: int,
+        profile_path: Path,
+        url: str,
+        on_closed=None,
+        auto_finish: bool = False,
     ) -> None:
         """Open the profile in an un-driven browser and hold it until it closes.
 
@@ -622,6 +634,16 @@ class BrowserManager:
         directory. The lock is released when the window is closed, which is
         what makes "close the window when you are done" the whole of the user's
         side of the contract.
+
+        `auto_finish` is for the checkout window, where the *page* decides when
+        it is done: Epic's checkout ends by taking its own window away, and on
+        an Xvfb with no window manager that is a black screen and nothing else.
+        With it set, Trove watches the display for that (through xdotool, an X
+        server property - nothing is attached to the browser) and closes the
+        window itself once the browser has had no visible window for a few
+        seconds running, which runs `on_closed` exactly as pressing Done would.
+        It only ever fires *after* a window has been seen, so a slow-starting
+        Chrome is never mistaken for a finished one.
         """
         entry = self._entry(account_id, profile_path)
         if entry.lock.locked():
@@ -650,12 +672,60 @@ class BrowserManager:
         opened_at = asyncio.get_event_loop().time()
 
         async def _wait() -> None:
+            # For `auto_finish`: how the display has looked so far. A window has
+            # to have been seen before its absence can mean anything, and it has
+            # to be absent for several polls running, so a moment between pages
+            # is never read as the end.
+            seen_window = False
+            blank_polls = 0
+            asked_to_close = False
+            last_titles: list[str] | None = None
             try:
                 # Polled rather than awaited: `Popen` is not an asyncio object,
                 # and a thread per sign-in window to call `wait()` would be a
                 # thread that outlives the window on a shutdown.
                 while process.poll() is None:
                     await asyncio.sleep(2)
+                    if not auto_finish:
+                        continue
+                    # Ask the X server what is on the screen. In a thread: it is
+                    # a subprocess call, and the event loop is also serving the
+                    # screen view's frames.
+                    titles = await asyncio.to_thread(window_titles)
+                    if titles is None:
+                        continue  # cannot look here; leave it to the person
+                    if titles != last_titles:
+                        # The measurement this exists for: what the checkout
+                        # actually leaves on the screen, in the log, so the next
+                        # version is written against it rather than a guess.
+                        logger.info(
+                            "Account %s: the window on the screen is now %s.",
+                            account_id,
+                            titles or "gone (no visible browser window)",
+                        )
+                        last_titles = titles
+                    if titles:
+                        seen_window = True
+                        blank_polls = 0
+                        continue
+                    if not seen_window or asked_to_close:
+                        continue  # not up yet, or already on its way out
+                    blank_polls += 1
+                    if blank_polls >= BLANK_POLLS_BEFORE_FINISH:
+                        logger.info(
+                            "Account %s: the browser has had no window for %.0f s, "
+                            "so the checkout has closed itself. Finishing up.",
+                            account_id,
+                            blank_polls * 2.0,
+                        )
+                        try:
+                            process.terminate()
+                        except OSError as exc:  # pragma: no cover - already gone
+                            logger.debug("Closing the finished window: %s", exc)
+                        # Not a `break`: let the loop see the process actually
+                        # exit, so the lock is released and the profile is read
+                        # only once Chrome has let go of it.
+                        asked_to_close = True
                 # A window nobody could have used. Chrome dying on launch -
                 # the sandbox, a missing library, a display that is not there -
                 # looks from the interface like a window that was closed at

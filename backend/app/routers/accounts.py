@@ -359,7 +359,12 @@ async def finish_claim(account_id: int, db: Session = Depends(get_db)) -> Accoun
             )
 
     try:
-        await manager.open_local(account.id, profile, url, on_closed=_verify)
+        # `auto_finish`: Epic's checkout ends by taking its own window away, and
+        # on the container's screen that is simply black. Trove notices and
+        # finishes up rather than leaving somebody looking at it wondering.
+        await manager.open_local(
+            account.id, profile, url, on_closed=_verify, auto_finish=True
+        )
     except ProfileBusy as exc:
         raise HTTPException(409, str(exc)) from exc
     except NoLocalBrowser as exc:

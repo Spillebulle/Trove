@@ -2,12 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.0. The loop is built and the interface is complete.** Epic
-discovery, the per-account scheduler, the ledger, notifications and the live
-browser view all work and have been driven against the real store. The one part
-that is written but unproven is Epic's *checkout*, because proving it needs a
-signed-in Epic account. See "What is verified and what is not" below, and keep
-that section honest: it is the difference between this file and a wish list.
+**Status: v0.1.19. The loop is closed - a real game has been claimed.** On 20
+Aug 2026, in the container, against a live Epic account: discovery found the
+giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
+driven browser cannot pass, the person finished that one order in the un-driven
+window, and Trove read the library and wrote the `claimed` row. Epic agrees the
+game is owned. Everything the app is for has now run end to end at least once.
+
+What that does *not* mean: it is one sample. The automatic finish is written
+against that claim's log but has not been seen to fire, a second store has no
+adapter, and nothing has run unattended for a week. See "What is verified and
+what is not" below, and keep that section honest: it is the difference between
+this file and a wish list.
 
 Keep this file current. When you learn a store's quirk, a Playwright trap, or a
 scheduling rule that is not obvious from the code, write it down here rather
@@ -425,9 +431,33 @@ ledger row and clears `checkout_offer` if so, or leaves the button in place to
 retry if not. On a desktop the window is in front of the person; in a container
 it is on the Xvfb and they work it through the screen view - the exact machinery
 sign-in already uses, copy aside. `checkout_pending` on the account read drives
-the button. **Built, and the claim-sim covers both branches (no-captcha ->
-claimed, captcha -> CheckoutBlocked); the end-to-end un-driven claim is not yet
-reported from a real account.**
+the button.
+
+**And it works. A real game was claimed this way, 20 Aug 2026 (0.1.19).** The
+run stopped at the captcha as designed, "Finish the claim here" opened the
+un-driven window on the checkout, the person pressed "Add to library" and
+accepted, `verify_checkout` then read the library and wrote a `claimed` row -
+and Epic's own account confirms it. **That is the last unproven step of the
+whole app closed:** discovery -> schedule -> session -> checkout -> ledger has
+now run end to end against a live store, in a container, from the first free
+game to the row in the table. The design's central claim - sessions not logins,
+a person for the one step that needs one, never a solved captcha - holds.
+
+**The finish is a black screen, and that is Epic closing its own window.** The
+one confusing part of that first claim: after "I accept" the screen went black
+and stayed black. Measured from the log, Chrome was *still running* at that
+point (`close-sign-in` returned 204, so there was a live process to terminate),
+so what had gone was the window, not the browser - and an Xvfb with no window
+manager and no window on it is simply black. The order had already succeeded.
+So `open_local(auto_finish=True)` now watches the display for exactly that:
+`keyboard.window_titles` asks the X server (a window property, nothing attached
+to the browser) every two seconds, and once the browser has had **no** visible
+window for `BLANK_POLLS_BEFORE_FINISH` polls running - having had one earlier,
+so a slow start is never mistaken for a finish - Trove closes the window itself
+and runs the same verification pressing Done would. It also logs each change in
+what is on the screen, so if a future store leaves something else behind, the
+next session reads what it was instead of guessing. Pressing Done still works
+and is still the honest fallback.
 
 **The checkout is a phase-aware loop (`epic._drive_checkout`).** Epic
 interleaves the steps differently per title and a captcha can land between any
@@ -743,6 +773,12 @@ session trusting something nobody has run.
   drag or `selectstart` is started.
 - That a *fresh* profile is let through Epic's interstitial where an older one
   on the same machine is not.
+- **A claim. The whole loop, on a real Epic account, in the container**
+  (20 Aug 2026): the scheduled-style run found the giveaway, drove the checkout,
+  stopped at Epic's captcha, and the person finished the order in the un-driven
+  window; Trove then read the library, wrote the `claimed` row, and Epic agrees
+  the game is owned. Every earlier entry in this list was a piece of that; this
+  is the first time the pieces have run as one thing.
 - **That Epic refuses a checkout-captcha solve done in the driven browser**, by
   the `confirm-order` response captured from a real account: `HTTP 400
   epic.error.captcha.challenge.failed`, with the token present. This is what
@@ -862,17 +898,16 @@ window. See the two paragraphs on it above.
 
 **Written and NOT verified:**
 
-- **The un-driven claim, end to end.** The button, the window on the checkout
-  page, and `verify_checkout` are built and the sim covers the branch, but a
-  real account pressing "Add to library" in the un-driven window and Trove then
-  reading the game in the library has not been reported. This is the last
-  unproven step of the whole claim, and the un-driven window is the same one
-  that already passes sign-in, so the odds are good - but it is unproven.
-- **The confirmation wording / ownership fallback.** `verify_checkout` trusts
-  `is_owned` (the product page's "In Library" marker) as ground truth after the
-  window closes; `CONFIRMED` in the driven flow is now moot for Epic, since the
-  driven flow stops at the captcha. Whether `is_owned` reliably flips to True
-  right after a hand-finished order is unproven and is the first thing to check.
+- **The automatic finish (`auto_finish`), on a real claim.** The first
+  end-to-end claim was finished by pressing Done. The display watch that should
+  make that unnecessary - close the window when the browser has had no window
+  for eight seconds - is written against exactly what that claim's log showed
+  (a live Chrome process with its window gone) but has not itself been seen to
+  fire. If it does not, its own log line says what was on the screen instead,
+  which is the measurement to write the next version against. Pressing Done is
+  unaffected either way.
+- **A second claim of any kind.** One claim is one sample: it proves the path
+  exists, not that it is reliable. The next weekly giveaway is the test.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in

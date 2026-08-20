@@ -187,7 +187,7 @@ export function AccountDetail() {
       if (localSignIn.data?.via === 'screen') {
         setFinishing(true)
         setSignInStep(
-          'Press “Add to library”, answer the captcha, accept — then press Done.',
+          'Press “Add to library”, answer the captcha, accept. When the screen goes black the order is through — Trove closes up and checks your library on its own.',
         )
         setScreenOpen(true)
       } else {
@@ -329,18 +329,24 @@ export function AccountDetail() {
   const activity =
     signInHere.isPending
       ? 'Opening a sign-in window…'
-      : checkSessionNow.isPending
-        ? 'Asking the store whether this account is signed in…'
-        : runNow.isPending
-          ? 'Starting a run…'
-          : resetProfile.isPending
-            ? 'Starting a fresh browser profile…'
-            : data.busy_with === 'a sign-in check'
-              ? 'Checking whether this account is signed in…'
+      : finishClaim.isPending
+        ? 'Opening the checkout…'
+        : checkSessionNow.isPending
+          ? 'Asking the store whether this account is signed in…'
+          : runNow.isPending
+            ? 'Starting a run…'
+            : resetProfile.isPending
+              ? 'Starting a fresh browser profile…'
+              : data.busy_with === 'a checkout check'
+                ? 'Checking whether the game landed in your library…'
+                : data.busy_with === 'a sign-in check'
+                  ? 'Checking whether this account is signed in…'
               : data.busy_with === 'a claim run'
                 ? 'Checking the store for free games…'
                 : data.busy_with === 'a sign-in window'
-                  ? 'A sign-in window is open on Trove’s screen.'
+                  ? finishing
+                    ? 'The checkout is open on Trove’s screen.'
+                    : 'A sign-in window is open on Trove’s screen.'
                   : data.busy_with === 'the live view'
                     ? 'The live view is open.'
                     : null
@@ -926,7 +932,7 @@ export function AccountDetail() {
         title={`${data.label} on Trove's screen`}
         subtitle={
           finishing
-            ? 'The checkout, in a normal browser window with nothing attached to it — the one Epic’s captcha accepts. Add the game to your library, answer the captcha, then press Done.'
+            ? 'The checkout, in a normal browser window with nothing attached to it — the one Epic’s captcha accepts. Add the game to your library and answer the captcha. When the order goes through Epic closes its own window and the screen goes black: that is the finish, and Trove takes it from there.'
             : 'A normal browser window, opened inside the container with nothing attached to it.'
         }
         size="large"
@@ -1010,9 +1016,11 @@ export function AccountDetail() {
                   onClick={() => closeSignIn.mutate()}
                   disabled={closeSignIn.isPending || data.busy_with !== 'a sign-in window'}
                   title={
-                    data.busy_with === 'a sign-in window'
-                      ? 'Close the sign-in window. Trove then checks whether the account is signed in.'
-                      : 'There is no sign-in window open for this account.'
+                    data.busy_with !== 'a sign-in window'
+                      ? 'There is no window open for this account.'
+                      : finishing
+                        ? 'Close the checkout window. Trove then checks whether the game landed in your library.'
+                        : 'Close the sign-in window. Trove then checks whether the account is signed in.'
                   }
                 >
                   {closeSignIn.isPending ? <Spinner /> : null}

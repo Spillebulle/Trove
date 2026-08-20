@@ -383,6 +383,11 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
         started = utcnow()
         owned: bool | None = None
         shot: str | None = None
+        logger.info(
+            "Account %s: the checkout window closed; asking Epic whether %r landed.",
+            account_id,
+            row.title,
+        )
         try:
             async with manager.session(
                 account.id, profile_path, holder="a checkout check", wait_s=5.0
@@ -429,6 +434,7 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
                     image_url=row.image_url,
                 ),
             )
+            logger.info("Account %s: %r is in the library. Claimed.", account_id, row.title)
             return True, f"{row.title} is in your library."
 
         # Could not confirm. Keep the marker so the button stays; say so plainly.
