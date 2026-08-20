@@ -2,7 +2,7 @@
 
 Rasterised with the same Chrome the app runs, loading the bundled Archivo woff2
 so the wordmark is pixel-for-pixel the app's typeface rather than a look-alike.
-Outputs to docs/brand and frontend/public.
+Outputs to docs/brand, docs/images and frontend/public.
 """
 import base64
 from pathlib import Path
@@ -10,12 +10,24 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 BRAND = ROOT / "docs/brand"
+IMAGES = ROOT / "docs/images"
 PUBLIC = ROOT / "frontend/public"
 FONT = ROOT / "frontend/src/assets/fonts/archivo-variable.woff2"
 
 ORCHID = "#AA85C5"
 INK_DARK = "#17181B"   # wordmark on light backgrounds
 INK_LIGHT = "#F3F1EC"  # wordmark on dark backgrounds
+
+# The README banner (style guide 17.4): 1354 x 461 on the theme's backdrop,
+# the same size every app in the family uses, with the lockup small in the
+# middle of it. The margin is the design - a lockup cropped to its own edges
+# reads as a stray image; the ground is what makes it a banner.
+BANNER_W, BANNER_H = 1354, 461
+BANNER_MARK = 150      # mark side, ~1/3 of the height, matching Umber's
+BACKDROP_DARK = "#0D0E10"   # --backdrop, dark theme
+BACKDROP_PAPER = "#E4E0D9"  # --backdrop, light theme
+INK_ON_DARK = "#E6E7E9"     # --text-strong, dark theme
+INK_ON_PAPER = "#3A3836"    # --text-strong, light theme
 
 font_b64 = base64.b64encode(FONT.read_bytes()).decode()
 
@@ -76,6 +88,22 @@ def lockup(ink):
     </div>"""
 
 
+def banner(ground, ink):
+    # Mark + wordmark centred on the backdrop, nothing else in it: no tagline,
+    # no version. Proportions are the lockup's, scaled up from mark 76 / font 96.
+    scale = BANNER_MARK / 76
+    F = round(96 * scale)
+    gap = round(22 * scale)
+    return f"""
+    <div id="stage" style="width:{BANNER_W}px;height:{BANNER_H}px;background:{ground};
+      display:flex;align-items:center;justify-content:center;gap:{gap}px;">
+      {mark_svg(BANNER_MARK)}
+      <span style="font-family:'Archivo',system-ui,sans-serif;font-weight:900;font-size:{F}px;
+        letter-spacing:{-2 * scale:.1f}px;color:{ink};line-height:1;text-transform:uppercase;
+        position:relative;top:{round(scale)}px;">Trove</span>
+    </div>"""
+
+
 def icon_fullbleed(px):
     # Full-bleed orchid square with white coins, no transparency (app/apple icon).
     pad = int(px * 0.19)
@@ -109,7 +137,12 @@ def og_card():
 
 
 with sync_playwright() as p:
-    b = p.chromium.launch(channel="chrome", headless=True)
+    # --disable-lcd-text: without it Chrome antialiases the wordmark with
+    # subpixel (ClearType) coverage, which puts red and blue fringes in the
+    # letters - colours that are in no palette and that read as artefacts on
+    # any ground but the one they were rendered against.
+    b = p.chromium.launch(channel="chrome", headless=True,
+                          args=["--disable-lcd-text"])
     page = b.new_page(device_scale_factor=2)
 
     BRAND.mkdir(parents=True, exist_ok=True)
@@ -121,6 +154,13 @@ with sync_playwright() as p:
     # OG card at exact 1200x630 (scale 1 so the file is 1200x630, not 2400).
     page1 = b.new_page(device_scale_factor=1)
     render(page1, og_card(), BRAND / "og.png", 1200, 630, scale=1, omit_bg=False)
+
+    # The README banner at exact 1354 x 461, both grounds, no transparency.
+    IMAGES.mkdir(parents=True, exist_ok=True)
+    render(page1, banner(BACKDROP_DARK, INK_ON_DARK), IMAGES / "banner.png",
+           BANNER_W, BANNER_H, scale=1, omit_bg=False)
+    render(page1, banner(BACKDROP_PAPER, INK_ON_PAPER), IMAGES / "banner-paper.png",
+           BANNER_W, BANNER_H, scale=1, omit_bg=False)
 
     # App icons at exact pixel sizes (scale 1).
     for px, out in [(180, PUBLIC / "apple-touch-icon.png"),

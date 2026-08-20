@@ -1,4 +1,4 @@
-![Trove](docs/brand/logo-light.png)
+![Trove](https://raw.githubusercontent.com/Spillebulle/Trove/main/docs/images/banner.png)
 
 # Trove
 

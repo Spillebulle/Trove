@@ -1,7 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.png">
-    <img alt="Trove" src="docs/brand/logo-light.png" width="300">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/banner-paper.png">
+    <img alt="Trove" src="docs/images/banner.png" width="560">
   </picture>
 </p>
 

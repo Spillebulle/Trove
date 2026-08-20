@@ -104,6 +104,18 @@ a status; it means selected, in hand, primary (§2.4).
 Read the checklist in §16 of the style guide before the first screen ships, and
 §17 before the README.
 
+**The README banner is the family's, not this app's** (§17.4): `docs/images/
+banner.png` and `banner-paper.png`, 1354 x 461 on the theme's backdrop, mark
+and wordmark small in the middle with a wide margin, `<picture>` at width 560 -
+the same file size and layout as Umber, Tally, Muster and HomeLab. Trove used
+to ship a tight transparent lockup instead, which read as a stray image rather
+than a banner. `tools/brand_render.py` composes both (and the icons and the OG
+card) in real Chrome with the app's own Archivo. One trap: Chrome antialiases
+text with subpixel coverage, so the wordmark came out with red and blue fringes
+in it - colours from no palette, and wrong on any ground but the one they were
+rendered against. The launch carries `--disable-lcd-text`; measured, the
+worst per-pixel channel spread in the letters fell from 154 to 4.
+
 ## The stack
 
 Follow Tally's shape, which is the house pattern for a hosted app in this
