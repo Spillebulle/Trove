@@ -194,6 +194,16 @@ NOT_ELIGIBLE = [
     'text=/this product is not available/i',
 ]
 
+# An error Epic raises while processing the order - the "An error occurred while
+# trying to process your request. Please check your network connection and try
+# again." toast. Seen after the order button was clicked a second time while the
+# first order was still in flight; the checkout loop now avoids that, and if the
+# error appears anyway it is shown rather than clicked into again.
+ERROR = [
+    'text=/error occurred while trying to process your request/i',
+    'text=/please check your network connection/i',
+]
+
 
 async def _goto(page: Page, url: str) -> None:
     """Navigate, tolerating a navigation the page replaced under us.
@@ -474,53 +484,68 @@ class EpicAdapter(BaseAdapter):
 
         await waiter.wait(_cleared, image_name=shot)
 
-    # The order the checkout is driven in: a mid-checkout consent dialog is
-    # answered before the underlying order button is touched again, and a
-    # device notice before the order button. `PLACE_ORDER` last, so once the
-    # game is added the loop moves on to the dialog rather than re-clicking it.
-    _CHECKOUT_STEPS = (
-        ("accept", "ACCEPT"),
-        ("continue", "COMPAT_CONTINUE"),
-        ("order", "PLACE_ORDER"),
-    )
-
     async def _drive_checkout(self, page: Page, offer: FreeOffer, waiter) -> str | None:
         """Click through the checkout until it confirms. Returns an outcome or None.
 
-        Each turn: stop on a captcha or a sign-out (via `_guard`), return early
-        if the page already says confirmed / owned / not-eligible, otherwise
-        click the highest-priority thing on the page (a consent dialog first,
-        then a device notice, then the add-to-library button) and go round
-        again. Bounded, so a checkout that never resolves stops rather than
-        spins. None means "clicked things but saw no confirmation" - the caller
-        then checks the library directly.
+        Phase-aware, and that matters. **The add-to-library button is clicked at
+        most once.** The first version clicked "whatever is on the page next",
+        and after the consent dialog was accepted it still saw the add-to-library
+        button behind the (now closing) dialog and clicked it again - a second
+        order racing the first, which Epic answers with "An error occurred while
+        trying to process your request." So once the order is placed the loop
+        never touches that button again: it only answers a consent dialog, shows
+        a real error, or waits for the confirmation.
+
+        Each turn: stop on a captcha or sign-out (`_guard`); return if the page
+        says confirmed / owned / not-eligible; answer a consent dialog if one is
+        up; stop on an error toast; otherwise, in the opening phase click the
+        add-to-library button (once), and after that just wait for the order to
+        go through. Bounded, so a checkout that never resolves stops rather than
+        spins. None means "clicked but saw no confirmation" - the caller then
+        checks the library directly.
         """
-        steps = {
-            "accept": ACCEPT,
-            "continue": COMPAT_CONTINUE,
-            "order": PLACE_ORDER,
-        }
-        clicked = 0
-        for _ in range(12):
+        phase = "start"  # start -> ordered -> accepted
+        for _ in range(14):
             await self._guard(page, offer, waiter)
             if await _first_visible(page, CONFIRMED, timeout_ms=600):
                 logger.info("Epic checkout: confirmed %r.", offer.title)
                 return "claimed"
-            if await _first_visible(page, OWNED, timeout_ms=700):
+            if await _first_visible(page, OWNED, timeout_ms=500):
                 return "already_owned"
-            if await _first_visible(page, NOT_ELIGIBLE, timeout_ms=500):
+            if await _first_visible(page, NOT_ELIGIBLE, timeout_ms=400):
                 return "not_eligible"
 
-            target = None
-            for kind, _name in self._CHECKOUT_STEPS:
-                loc = await _first_visible(page, steps[kind], timeout_ms=700)
-                if loc is not None:
-                    target = loc
-                    logger.info("Epic checkout: clicking the %s button.", kind)
-                    break
+            # A consent dialog is answered first whatever the phase - it is the
+            # thing in front of the person, and the order is not placed until it
+            # is accepted.
+            accept = await _first_visible(page, ACCEPT, timeout_ms=700)
+            if accept is not None:
+                logger.info("Epic checkout: accepting the consent dialog.")
+                if await self._click(page, offer, accept, waiter):
+                    phase = "accepted"
+                    await page.wait_for_timeout(1000)
+                continue
 
-            if target is None:
-                if clicked == 0:
+            # An error Epic raised while processing. Show it rather than clicking
+            # into it again.
+            if await _first_visible(page, ERROR, timeout_ms=400) is not None:
+                raise NeedsAttention(
+                    "Epic returned an error at the checkout (its \"could not "
+                    "process your request\" message). It can be a passing "
+                    "hiccup - try the run again - or the account's address being "
+                    "refused; the screenshot shows it.",
+                    await self._shot(page, offer, "checkout-error"),
+                )
+
+            if phase == "start":
+                compat = await _first_visible(page, COMPAT_CONTINUE, timeout_ms=500)
+                if compat is not None:
+                    logger.info("Epic checkout: dismissing a device notice.")
+                    await self._click(page, offer, compat, waiter)
+                    await page.wait_for_timeout(600)
+                    continue
+                order = await _first_visible(page, PLACE_ORDER, timeout_ms=8000)
+                if order is None:
                     raise NeedsAttention(
                         "Could not find the button that adds the game to your "
                         "library. Epic has probably changed the checkout. Run "
@@ -528,17 +553,18 @@ class EpicAdapter(BaseAdapter):
                         "button's label goes in PLACE_ORDER or ACCEPT.",
                         await self._shot(page, offer, "no-order-button"),
                     )
-                # Something was clicked; give the confirmation a last long look.
-                if await _first_visible(page, CONFIRMED, timeout_ms=8000):
-                    logger.info("Epic checkout: confirmed %r.", offer.title)
-                    return "claimed"
-                return None
+                logger.info("Epic checkout: adding %r to the library.", offer.title)
+                if await self._click(page, offer, order, waiter):
+                    phase = "ordered"
+                    await page.wait_for_timeout(1000)
+                # If the click did not land (a captcha was handled), loop and
+                # re-read: the order button is still there to click once.
+                continue
 
-            if await self._click(page, offer, target, waiter):
-                clicked += 1
-                await page.wait_for_timeout(600)
-            # If the click did not land (a captcha was handled instead), just
-            # loop and re-read the page - what is actionable has changed.
+            # Past the order button, with no dialog and no error: the order is
+            # being placed. **Do not touch the add-to-library button again.**
+            # Just wait and let the top of the loop catch the confirmation.
+            await page.wait_for_timeout(1200)
         return None
 
     async def _click(self, page: Page, offer: FreeOffer, locator, waiter) -> bool:

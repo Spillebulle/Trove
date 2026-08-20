@@ -34,6 +34,7 @@ _NAMES = {
     id(epic.CONFIRMED): "CONFIRMED",
     id(epic.OWNED): "OWNED",
     id(epic.NOT_ELIGIBLE): "NOTELIG",
+    id(epic.ERROR): "ERROR",
     id(epic.CHALLENGE): "CHALLENGE",
     id(epic.SIGNED_OUT): "SIGNEDOUT",
 }
@@ -42,6 +43,7 @@ _VISIBLE = {
     "order": {"ORDER"},
     "captcha": {"ORDER", "CHALLENGE"},  # challenge covers the order button
     "accept": {"ACCEPT", "ORDER"},  # withdrawal dialog, order still behind it
+    "processing": {"ORDER"},  # dialog gone, order button STILL there, no confirm
     "confirmed": {"CONFIRMED"},
 }
 
@@ -59,10 +61,13 @@ async def main() -> int:
                 state["stage"] = "captcha"  # a captcha pops and intercepts
                 raise PWTimeout("intercepted")
             if self.name == "ACCEPT" and state["stage"] == "accept":
-                state["stage"] = "confirmed"
+                state["stage"] = "processing"  # order placed; button lingers
 
     async def fake_first_visible(page, selectors, timeout_ms=0):
         name = _NAMES.get(id(selectors))
+        if name == "CONFIRMED" and state["stage"] == "processing":
+            state["stage"] = "confirmed"  # the order goes through on the next look
+            return None
         if name == "CHALLENGE":
             if state["stage"] == "captcha":
                 state["challenge_seen"] += 1
@@ -110,7 +115,8 @@ async def main() -> int:
     if result.outcome != "claimed":
         print("FAIL: expected claimed"); ok = False
     if state["clicks"] != ["ORDER", "ACCEPT"]:
-        print("FAIL: expected ORDER then ACCEPT (order not re-clicked behind the dialog)"); ok = False
+        print("FAIL: expected exactly ORDER then ACCEPT - a third ORDER click means the",
+              "loop re-submitted the order behind the dialog (the 'error occurred' bug)."); ok = False
     if not any(k == "attention" and img and "captcha" in img for k, img in notified):
         print("FAIL: expected a captcha notification with the screenshot attached"); ok = False
     print("PASS" if ok else "FAILED")

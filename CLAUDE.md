@@ -377,7 +377,22 @@ fallback is finishing the checkout in the **un-driven** window (no CDP at all,
 the same browser that already passes the sign-in challenge). Not built yet;
 build it only if a watched solve is shown to fail.
 
-**The checkout is a step-loop (`epic._drive_checkout`).** Epic interleaves the checkout steps differently per title and a captcha can land between any two, so rather than a fixed order→agree→confirm sequence it clicks whatever is on the page next, in priority order: a consent dialog (`ACCEPT` - the "Right of Withdrawal" / EULA "I accept", verified Aug 2026 to appear after Add to library and after the captcha), then a device "Continue", then the `PLACE_ORDER` add-to-library button, until it sees `CONFIRMED`/`OWNED`. `ACCEPT` leads so a dialog is answered rather than the order button re-clicked behind it, and its dialog-scoped selectors land on "I accept" and never the "Cancel" beside it. Simulated through the order→withdrawal→confirmed sequence; the real end-to-end claim is still to be confirmed.
+**The checkout is a phase-aware loop (`epic._drive_checkout`).** Epic
+interleaves the steps differently per title and a captcha can land between any
+two, and a real trap surfaced against a live account: **the add-to-library
+button lingers on the page behind the "Right of Withdrawal" dialog while the
+order is processing.** A loop that clicks "whatever is next" clicked it a
+*second* time, racing the first order, and Epic answered with "An error occurred
+while trying to process your request." So the loop now has phases: in `start`
+it clicks the add-to-library button *once* (`PLACE_ORDER`); a consent dialog
+(`ACCEPT` - "I accept", dialog-scoped so it never hits the "Cancel" beside it)
+is answered whenever it appears; and once the order is placed it **never touches
+the add-to-library button again** - it only answers a dialog, surfaces an
+`ERROR` toast as `NeedsAttention` (with a screenshot), or waits for
+`CONFIRMED`/`OWNED`. `tools/checkout_sim.py` proves the order button is clicked
+exactly once even while it lingers in a "processing" state. The captcha and the
+"I accept" step are seen against a real account; a confirmed end-to-end claim is
+still to be reported.
 
 **The checkout is the live-fix surface.** `adapters/epic.PLACE_ORDER` (and
 AGREEMENT, CONFIRMED, OWNED) are a deliberately long list of selectors because
