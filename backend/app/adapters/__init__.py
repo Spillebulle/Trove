@@ -3,17 +3,20 @@
 HomeLab Manager's `ADAPTER_MAP` is the model. A new store is a new module here
 and one line in the table, and nothing else in the app learns its name.
 
-There is one store today, on purpose. CLAUDE.md is explicit: one store, one
-account, one full loop, proven, before a second adapter exists. A second
-adapter written before the first loop works is a second adapter to rewrite.
+Two stores now. Epic proved the full loop end to end first (CLAUDE.md's
+condition for a second adapter), and Prime Gaming is that second adapter -
+the one store whose discovery needs a session, which is why the contract
+carries `discovery_needs_session`.
 """
 from __future__ import annotations
 
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
+from .prime import PrimeAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
+    "prime": PrimeAdapter,
 }
 
 __all__ = [

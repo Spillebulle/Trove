@@ -607,7 +607,7 @@ Four concerns, kept thin, mirroring HomeLab's split. Where each one lives:
 |---|---|
 | HTTP/CRUD | `routers/accounts.py`, `routers/ledger.py`, `routers/settings.py`, `routers/live.py`, `main.py` |
 | Scheduler | `scheduler.py`, and `runner.py` for what one run does |
-| Store adapters | `adapters/base.py` (the contract), `adapters/epic.py`, `adapters/__init__.py` (`ADAPTER_MAP`) |
+| Store adapters | `adapters/base.py` (the contract), `adapters/epic.py`, `adapters/prime.py`, `adapters/__init__.py` (`ADAPTER_MAP`) |
 | Ledger | `models.py`, and the pages that are views of it |
 | The browser | `browser.py` (profiles and the lock), `live.py` (the screencast) |
 
@@ -647,6 +647,24 @@ to a public endpoint: no browser, no session, no account. A run that finds
 nothing to claim ends there having cost one HTTP request. `POST
 /api/offers/refresh` is the same path, which is why the button in the interface
 is safe to press and says so.
+
+**One store cannot honour that boundary, and the exception is explicit rather
+than smuggled.** Prime Gaming renders its offers only for a signed-in
+session (measured; see the Prime notes), so the contract carries one minimal
+extension: `BaseAdapter.discovery_needs_session` (default `False`) and
+`discover_in_session(page)` (default `[]`). For such a store,
+`list_free_offers()` returns `[]` honestly, and the claim run opens the
+account's session - the same `manager.session` path and lock - health-checks
+it **first** (a signed-out page renders no offers, and an empty page must read
+as "signed out", never "nothing free this week"), then discovers inside it and
+claims from that list in the same session. Persistence is one shared helper
+(`runner._persist_offers`), so the adapter never sees the database whichever
+way it found the offers, and `_pending_offers` applies the same
+already-claimed skip to both paths. `/api/offers/refresh` still loops every
+store and is still safe: for Prime it gets the empty list and touches nothing.
+The cost worth knowing: a Prime run always opens a browser, because there is
+no cheaper way to ask Amazon what is free. `tools/prime_sim.py` pins all of
+this in CI against a throwaway database.
 
 The public feed (`discovery.feed_enabled`) is a setting that exists and is off.
 GamerPower is the obvious candidate and **its terms have not been checked**. If
@@ -731,10 +749,33 @@ to a stopped app.
   is not, and will first be exercised on the Mage Bundle.**
 
 - **Prime Gaming** (what the user called Twitch Prime; Twitch Prime was renamed
-  years ago) — needs an active Amazon Prime subscription. Many of its offers are
-  *keys for other stores* (GOG, Epic, Legacy Games) rather than a library add, so
-  the ledger has to be able to record "claimed a key" and show the key to the
-  user. Amazon's login is the most aggressive of the set.
+  years ago) — built (`adapters/prime.py`), keep-forever **games only** in v1;
+  in-game loot drops are filtered out at discovery and are future work. Needs
+  an active Amazon Prime subscription. Many of its offers are *keys for other
+  stores* (GOG, Legacy Games, Microsoft) rather than a library add: the claim
+  reveals the code, the ledger stores it encrypted (`ClaimResult.key_code` /
+  `key_store`), and Trove never redeems it anywhere. Linked-account claims
+  (Epic/EA delivery) are attempted; a missing link stops with a sentence naming
+  which store to link. Amazon's login is the most aggressive of the set - sign
+  in by hand once, expect occasional re-verification even on a warm session.
+
+  Two things measured, 24 Aug 2026, from this container with plain httpx and a
+  Chrome user-agent, no cookies:
+
+  1. **There is no public offers feed.** `GET gaming.amazon.com/home` → `302`
+     to **`luna.amazon.com/claims/home?g=s`** → 200, a 10.6 kB SPA shell:
+     `<div id="root"></div>`, a "We're having technical difficulties" fallback,
+     `<noscript>You need to enable JavaScript`, zero occurrences of "Claim",
+     no embedded JSON state. `POST /graphql` on both hosts, unauthenticated →
+     HTTP 403. So discovery cannot be sessionless, which is what the
+     `discovery_needs_session` contract extension exists for.
+  2. **Prime Gaming now lives under `luna.amazon.com/claims`.** The redirect is
+     the store's own; the adapter follows it and nothing in it assumes which
+     host the SPA lands on. If a selector table is ever fixed against a real
+     page, note which host the page was on.
+
+  Everything session-bound in the adapter - the card scan, every selector, the
+  claim loop, the key reveal - is **written, not verified**; see below.
 - **GOG** — occasional giveaways, usually a simple claim on the promo page.
 - **Steam** — has no weekly giveaway; what exists is "free to keep" promotions
   and free-to-play adds, claimed from the store page. Do not build Steam as if
@@ -743,10 +784,12 @@ to a stopped app.
 - **EA (EA app / Origin)** and **Ubisoft Connect** — infrequent giveaways; worth
   an adapter only after the first two work end to end.
 
-One store, one account, one full loop is done. **A second adapter should still
-wait** until Epic's checkout has claimed something real, because the checkout is
-the only part of the contract no adapter has exercised yet, and a second store
-written against an unproven shape is a second store to rewrite.
+One store, one account, one full loop is done. The condition this file set for
+a second adapter - Epic's checkout claiming something real - was met on 20 Aug
+2026, and **Prime Gaming is that second adapter**. It is also the store that
+forced the one contract extension (`discovery_needs_session`), which is why it
+came before GOG: if the contract was going to bend anywhere, better to find
+out on the second store than the fourth.
 
 ## Commands
 
@@ -930,6 +973,21 @@ session trusting something nobody has run.
   no window manager at all, measured by the probe in the container without
   any focus emulation. So the container case `live.enable_focus` was kept for
   is also not a case where it changes anything observed.
+- **That Prime Gaming has no public offers feed**, measured 24 Aug 2026 with
+  plain httpx from this container: `gaming.amazon.com/home` 302s to
+  `luna.amazon.com/claims/home?g=s` and serves a 10.6 kB SPA shell with no
+  offer data in it, and `/graphql` answers 403 unauthenticated. This is the
+  measurement `discovery_needs_session` rests on. (Details in the Prime
+  per-store note.)
+- **The session-discovery runner path**, by `tools/prime_sim.py` against a
+  throwaway SQLite database and a fake adapter: the sessionless `discover()`
+  is a no-op, the session opens anyway, health runs *before*
+  `discover_in_session`, in-session offers land as `Offer` rows through the
+  shared persistence, an already-claimed offer is skipped, an unhealthy
+  session stops before discovery, and a sessionless store with nothing free
+  still opens no browser. Also Prime's claim loop at the same level: one
+  click then only reads, a revealed key comes back on the result with its
+  store, and a link wall stops before any click, naming the missing link.
 
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
@@ -952,6 +1010,22 @@ and cannot complete it, and the remedy is the un-driven "Finish the claim here"
 window. See the two paragraphs on it above.
 
 **Written and NOT verified:**
+
+- **Everything session-bound in `adapters/prime.py`.** There is no Prime
+  account here and the signed-out page is an empty shell, so there was no DOM
+  to read selectors off: the signed-in/signed-out markers, the challenge
+  markers, the offer-card scan (`_SCAN_CARDS_JS` and the id/title extraction),
+  the claim button labels, the "Claimed" state `is_owned` reads, the key
+  reveal, and the link-wall detection are all written from the frontend's
+  known `data-a-target` convention plus generous fallbacks - reasoning, not
+  observation. Every step logs what it actually found (card counts, shapes,
+  attributes, skip reasons), and everything unrecognised fails safe: no stable
+  id skips the card with a log line, an unreadable page is `None` never
+  `False`, an unrecognised post-click state is `NeedsAttention` with a
+  screenshot. **The first run against a real Prime account is the
+  measurement**; fix the tables at the top of `prime.py` against its log, the
+  way Epic's `PLACE_ORDER` gets fixed from a watched run, and note here which
+  host (gaming.amazon.com or luna.amazon.com) the real page was on.
 
 - **The automatic finish (`auto_finish`), on a real claim.** The first
   end-to-end claim was finished by pressing Done. The display watch that should
