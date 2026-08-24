@@ -141,6 +141,14 @@ class Settings(BaseSettings):
     interval_jitter: float = 0.15
     # A floor, so a typo in the UI cannot turn a claimer into a hammer.
     min_interval_hours: int = 1
+    # How often the global discovery tick asks each store what is free and
+    # upcoming, hours. This is the cheap half only - one HTTP request per
+    # store, no browser, no account - so it can run more often than the
+    # per-account claim runs it exists to serve: when a giveaway appears just
+    # after an account has run, the tick notices within a few hours and pulls
+    # that account's next run forward, rather than letting the drop wait out
+    # the whole interval. Jittered plus or minus 20 % in the scheduler.
+    discovery_interval_hours: int = 3
 
     # Set by the Dockerfile. There is no reason to set it by hand.
     in_container: bool = False

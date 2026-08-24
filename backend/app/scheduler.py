@@ -24,10 +24,11 @@ import random
 from datetime import timedelta
 
 from . import settings_store
+from .adapters import ADAPTER_MAP
 from .config import get_settings
 from .db import SessionLocal
 from .models import Account
-from .runner import run_account
+from .runner import discover, discover_upcoming, run_account, sweep_pending_checkouts
 from .timeutil import as_utc, utcnow
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _TICK_S = 30
 
 _tasks: dict[int, asyncio.Task] = {}
 _supervisor: asyncio.Task | None = None
+_housekeeper: asyncio.Task | None = None
 
 
 def effective_interval_hours(account: Account) -> int:
@@ -143,11 +145,118 @@ async def _supervise() -> None:
             await asyncio.sleep(60)
 
 
+async def _housekeep() -> None:
+    """The one global loop beside the per-account ones: the cheap work.
+
+    Everything in here is sessionless - one HTTP request per store, no
+    browser, no account touched - which is why one loop for the whole app is
+    fine where claim runs get a loop per account: there is no store session
+    to be slow with and nothing here can get anybody flagged. Each tick it
+
+    * asks every store what is free and what is announced (`discover` +
+      `discover_upcoming`), so a giveaway that drops between two claim runs is
+      noticed - and `discover` then pulls the due accounts forward, which is
+      the whole reason the tick runs more often than the accounts do;
+    * sweeps the pending checkouts (`sweep_pending_checkouts`): expires the
+      ones whose giveaway has gone, and reminds - once - about the ones about
+      to.
+
+    The cadence is `discovery_interval_hours`, jittered plus or minus 20 % so
+    the app does not hit the endpoint on a clock edge, and the whole tick sits
+    behind the same "schedule.enabled" switch as the runs: an install still
+    being set up should be completely quiet.
+    """
+    # The first tick comes a few minutes after start rather than an interval
+    # later, so an app that was down over a giveaway's drop catches up soon
+    # after it is back - and rather than *at* start, so a restart loop cannot
+    # turn into a request loop.
+    delay = random.uniform(120, 300)
+    while True:
+        try:
+            await asyncio.sleep(delay)
+            delay = settings.discovery_interval_hours * 3600 * random.uniform(0.8, 1.2)
+            db = SessionLocal()
+            try:
+                enabled = settings_store.get(db, "schedule.enabled")
+            finally:
+                db.close()
+            if not enabled:
+                continue
+            await _housekeep_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Same rule as the account loops: nothing but cancellation gets
+            # out, because a housekeeping loop that dies takes discovery's
+            # early warning with it until a restart.
+            logger.exception("The housekeeping tick hit an error.")
+
+
+async def _housekeep_once() -> None:
+    """One tick: discovery for every store, then the checkout sweep."""
+    db = SessionLocal()
+    try:
+        fresh: set[str] = set()
+        for store in ADAPTER_MAP:
+            try:
+                await discover(db, store)
+                # Only a discovery that answered may later be read as "the
+                # offer is gone from the list"; a fetch that failed says
+                # nothing about the offer, only about the network.
+                fresh.add(store)
+                await discover_upcoming(db, store)
+            except Exception as exc:
+                # A broken endpoint degrades to the per-account cadence, never
+                # to a stopped app - the claim runs discover for themselves.
+                db.rollback()
+                logger.warning("The discovery tick for %s failed: %s", store, exc)
+        sweep_pending_checkouts(db, fresh)
+    finally:
+        db.close()
+
+
+def _unpark_blocked_checkouts() -> None:
+    """One-time recovery for databases written by builds that parked these.
+
+    Those builds answered a checkout captcha by filing the account
+    `needs_attention`, which the scheduler skips forever - so one missed
+    captcha week silently parked the account for every future giveaway. The
+    marker and the reason survive (the button and the note still show); only
+    the parking is undone. An account that is *also* genuinely broken gets
+    re-filed by its next run's health check, which is the check that parked
+    it honestly in the first place.
+    """
+    db = SessionLocal()
+    try:
+        stuck = (
+            db.query(Account)
+            .filter(
+                Account.status == "needs_attention",
+                Account.checkout_offer.isnot(None),
+            )
+            .all()
+        )
+        for account in stuck:
+            account.status = "ok"
+            logger.info(
+                "Account %s was parked over a blocked checkout; scheduling it "
+                "again. The claim for %r still waits in the un-driven window.",
+                account.id,
+                account.checkout_offer,
+            )
+        if stuck:
+            db.commit()
+    finally:
+        db.close()
+
+
 def start() -> None:
-    global _supervisor
+    global _supervisor, _housekeeper
     if _supervisor is not None:
         return
+    _unpark_blocked_checkouts()
     _supervisor = asyncio.create_task(_supervise(), name="trove-scheduler")
+    _housekeeper = asyncio.create_task(_housekeep(), name="trove-housekeeping")
     logger.info("Scheduler started.")
 
 
@@ -158,16 +267,19 @@ async def stop() -> None:
     has unwound, and a run cancelled between placing an order and committing
     its ledger row is a claim that happened with no record of it.
     """
-    global _supervisor
+    global _supervisor, _housekeeper
     tasks = list(_tasks.values())
     if _supervisor is not None:
         tasks.append(_supervisor)
+    if _housekeeper is not None:
+        tasks.append(_housekeeper)
     for task in tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _tasks.clear()
     _supervisor = None
+    _housekeeper = None
     logger.info("Scheduler stopped.")
 
 

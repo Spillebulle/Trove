@@ -84,12 +84,20 @@ def _migrate(engine) -> None:
             "login_email": "TEXT",
             "login_password": "TEXT",
             "checkout_offer": "VARCHAR(200)",
+            # When the "two days left to finish that checkout" reminder
+            # went out, so a restart does not send it again.
+            "checkout_reminded_at": "DATETIME",
         },
         "claims": {
             # 0.1.21: the ledger tells a DLC from a game and carries its poster.
             # Existing rows default to "game", which is what they all were.
             "kind": "VARCHAR(20) NOT NULL DEFAULT 'game'",
             "image_url": "TEXT",
+        },
+        "offers": {
+            # When the offer first appeared in the free list, which is what
+            # tells "just became free" from "still free". Backfilled below.
+            "free_seen_at": "DATETIME",
         },
     }
     with engine.begin() as conn:
@@ -103,6 +111,19 @@ def _migrate(engine) -> None:
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {decl}"))
                     logger.warning("%s: added the %s column on startup", table, name)
+                    if table == "offers" and name == "free_seen_at":
+                        # Every row an older build stored came from the free
+                        # list - upcoming rows did not exist yet - so the first
+                        # sighting *was* the first free sighting. Without this,
+                        # the first discovery tick after an upgrade would read
+                        # every known offer as newly free and pull every
+                        # account's next run forward for games long claimed.
+                        conn.execute(
+                            text(
+                                "UPDATE offers SET free_seen_at = first_seen_at "
+                                "WHERE free_seen_at IS NULL"
+                            )
+                        )
 
 
 def get_db():

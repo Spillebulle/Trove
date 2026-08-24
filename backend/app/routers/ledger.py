@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db
 from ..models import Account, Claim, Offer, Run
-from ..runner import discover
+from ..runner import discover, discover_upcoming
 from ..schemas import ClaimKey, ClaimRead, OfferRead, RunRead, Summary
 from ..timeutil import utcnow
 
@@ -40,7 +40,12 @@ def summary(db: Session = Depends(get_db)) -> Summary:
     accounts = db.query(Account).all()
     free_now = (
         db.query(Offer.id)
-        .filter((Offer.ends_at.is_(None)) | (Offer.ends_at > now))
+        .filter(
+            (Offer.ends_at.is_(None)) | (Offer.ends_at > now),
+            # An announced offer is in the table too now, and "free now" must
+            # not count next week: a start in the future means not yet free.
+            (Offer.starts_at.is_(None)) | (Offer.starts_at <= now),
+        )
         .count()
     )
     claimed_total = db.query(Claim.id).filter(Claim.outcome == "claimed").count()
@@ -111,15 +116,18 @@ def list_offers(
 
 @router.post("/offers/refresh", response_model=list[OfferRead])
 async def refresh_offers(db: Session = Depends(get_db)) -> list[OfferRead]:
-    """Ask every store what is free right now.
+    """Ask every store what is free right now, and what is announced.
 
     Safe to press: this is the half of the app that touches no account and
-    opens no browser, so it costs one HTTP request per store and cannot get
-    anybody flagged. That is exactly why discovery is separate from claiming.
+    opens no browser, so it costs a couple of HTTP requests per store and
+    cannot get anybody flagged. That is exactly why discovery is separate from
+    claiming. The upcoming list rides along so the calendar refreshes with the
+    same button; it is recorded only, never claimed.
     """
     for store in ADAPTER_MAP:
         try:
             await discover(db, store)
+            await discover_upcoming(db, store)
         except Exception as exc:
             logger.warning("Could not read the offers for %s: %s", store, exc)
     return list_offers(current=True, db=db)

@@ -377,7 +377,14 @@ class EpicAdapter(BaseAdapter):
 
     # ── Discovery ────────────────────────────────────────────────────────
 
-    async def list_free_offers(self) -> list[FreeOffer]:
+    async def _fetch_elements(self) -> list[dict]:
+        """The promotions payload's elements: one request, both lists in it.
+
+        `freeGamesPromotions` carries this week's giveaway and next week's
+        announcement in the same response, so the free and the upcoming
+        parsers read the same shape and differ only in which promotion window
+        they believe.
+        """
         params = {"locale": LOCALE, "country": COUNTRY, "allowCountries": COUNTRY}
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.get(
@@ -391,14 +398,23 @@ class EpicAdapter(BaseAdapter):
             payload = response.json()
 
         try:
-            elements = payload["data"]["Catalog"]["searchStore"]["elements"]
+            return payload["data"]["Catalog"]["searchStore"]["elements"]
         except (KeyError, TypeError):
             logger.error("Epic's promotions payload was not the shape expected.")
             return []
 
+    async def list_free_offers(self) -> list[FreeOffer]:
         offers: list[FreeOffer] = []
-        for element in elements:
+        for element in await self._fetch_elements():
             offer = _parse_element(element)
+            if offer is not None:
+                offers.append(offer)
+        return offers
+
+    async def list_upcoming_offers(self) -> list[FreeOffer]:
+        offers: list[FreeOffer] = []
+        for element in await self._fetch_elements():
+            offer = _parse_upcoming_element(element)
             if offer is not None:
                 offers.append(offer)
         return offers
@@ -1016,6 +1032,64 @@ def _parse_element(element: dict) -> FreeOffer | None:
             # Only set for an add-on: the page of the game it belongs to, so a
             # DLC claim can check the prerequisite before spending a checkout on
             # something the account cannot use.
+            "base_url": _base_game_url(element),
+        },
+    )
+
+
+def _parse_upcoming_element(element: dict) -> FreeOffer | None:
+    """One search-store element, if it is announced to become free.
+
+    The mirror of `_parse_element`, for the calendar: a promotion that is not
+    running yet but whose upcoming window will make the thing free when it
+    starts. The two-condition reasoning at the top of this file is why the
+    *price* filter cannot be reused here: an upcoming giveaway usually still
+    lists its full price (the discount has not started), while the "Epic Mage
+    Bundle" listed 0 before its week - so the price says nothing reliable
+    about next week. What does say it is the upcoming window's own
+    `discountSetting`: `discountPercentage == 0` is Epic's way of writing
+    "becomes 100 % off", and it is the same field the store's front page reads
+    to caption next week's tile.
+
+    An element with a *current* promotional offer is left to `_parse_element`,
+    even if it also lists a future window, so one element never becomes two
+    rows disagreeing about when it is free.
+    """
+    promotions = element.get("promotions") or {}
+    if promotions.get("promotionalOffers"):
+        return None  # running now; the free parser owns it
+    upcoming = promotions.get("upcomingPromotionalOffers") or []
+
+    window = None
+    for group in upcoming:
+        for candidate in group.get("promotionalOffers") or []:
+            setting = candidate.get("discountSetting") or {}
+            if setting.get("discountPercentage") == 0:
+                window = candidate
+                break
+        if window is not None:
+            break
+    if window is None:
+        return None  # a future discount, not a future giveaway
+
+    namespace = element.get("namespace")
+    offer_id = element.get("id")
+    title = element.get("title")
+    if not (namespace and offer_id and title):
+        return None
+
+    return FreeOffer(
+        external_id=f"{namespace}:{offer_id}",
+        title=title,
+        url=_product_url(element),
+        image_url=_image_url(element),
+        kind=_kind(element),
+        starts_at=_parse_date(window.get("startDate")),
+        ends_at=_parse_date(window.get("endDate")),
+        source="store",
+        extra={
+            "namespace": namespace,
+            "offer_id": offer_id,
             "base_url": _base_game_url(element),
         },
     )

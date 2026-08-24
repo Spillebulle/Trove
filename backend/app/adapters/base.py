@@ -200,6 +200,21 @@ class BaseAdapter(ABC):
     async def list_free_offers(self) -> list[FreeOffer]:
         """What is free right now. No account, no session, no browser."""
 
+    async def list_upcoming_offers(self) -> list[FreeOffer]:
+        """What is announced to become free, with `starts_at` in the future.
+
+        The same discipline as `list_free_offers` - a public endpoint, no
+        account, no browser - and the same shape back. The default is an empty
+        list, because most stores do not announce their giveaways; a store that
+        does (Epic names next week's on the same endpoint) overrides this so
+        the interface can show a calendar and the scheduler knows the moment
+        an announced offer actually turns free.
+
+        Nothing returned here is ever claimed: a claim run works only off what
+        `list_free_offers` says is free *now*.
+        """
+        return []
+
     @abstractmethod
     async def health(self, page: Page) -> tuple[bool, str]:
         """Is the stored session still signed in? Returns (ok, a sentence)."""

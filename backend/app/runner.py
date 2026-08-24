@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -45,7 +47,7 @@ from .config import get_settings
 from .crypto import encrypt
 from .db import SessionLocal
 from .models import Account, Claim, Offer, Run
-from .timeutil import utcnow
+from .timeutil import as_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,17 @@ settings = get_settings()
 # person reading a store page does not place two orders in the same second, and
 # the cost of being wrong about that is the account, not the game.
 PAUSE_BETWEEN_CLAIMS_S = 4.0
+
+# When a blocked checkout's giveaway has this long left to run, one reminder
+# goes out: enough notice to actually do something about it, late enough that
+# most weeks the person has long since pressed the button.
+CHECKOUT_REMINDER_WINDOW_H = 48
+
+# How stale an offer's `last_seen_at` may be, after a discovery that succeeded,
+# before "not refreshed" is read as "gone from the store's list". Generous: a
+# fresh discovery stamps the rows within the same second, so anything an hour
+# old genuinely was not in the answer.
+CHECKOUT_GONE_SLACK_H = 1
 
 # How long a watched run keeps the browser open on the screen after it finishes
 # or stops, so a person can look at the page that failed. They close it sooner
@@ -198,41 +211,238 @@ class RunCancelled(Exception):
     """The app is shutting down mid-run."""
 
 
-async def discover(db: Session, store: str) -> list[FreeOffer]:
+def _upsert_offer(db: Session, store: str, offer: FreeOffer, now) -> Offer:
+    """One offer into the `offers` table, keeping its history.
+
+    An offer already known keeps its `first_seen_at` and gets a fresh
+    `last_seen_at`, which is what lets the UI say how long something has been
+    up - and it is the same row whether it was first seen as an announcement
+    or as a live giveaway, because `external_id` is the identity. An upcoming
+    offer that later turns free therefore transitions in place rather than
+    becoming a second row.
+    """
+    row = (
+        db.query(Offer)
+        .filter(Offer.store == store, Offer.external_id == offer.external_id)
+        .first()
+    )
+    if row is None:
+        row = Offer(
+            store=store,
+            external_id=offer.external_id,
+            first_seen_at=now,
+        )
+        db.add(row)
+    row.title = offer.title
+    row.url = offer.url
+    row.image_url = offer.image_url
+    row.kind = offer.kind
+    row.starts_at = offer.starts_at
+    row.ends_at = offer.ends_at
+    row.source = offer.source
+    row.last_seen_at = now
+    return row
+
+
+async def discover(
+    db: Session, store: str, exclude_account_id: int | None = None
+) -> list[FreeOffer]:
     """Ask a store what is free, and record it. No account, no browser.
 
-    Returns what the adapter said, and updates the `offers` table so the UI can
-    show what is free whether or not anybody has claimed it. An offer already
-    known keeps its `first_seen_at` and gets a fresh `last_seen_at`, which is
-    what lets the UI say how long something has been up.
+    Returns what the adapter said, and updates the `offers` table so the UI
+    can show what is free whether or not anybody has claimed it.
+
+    An offer seen in the free list for the *first time* - brand new, or known
+    until now only as next week's announcement - is stamped `free_seen_at`,
+    and that one moment is when the due times of this store's healthy accounts
+    are pulled forward (`_pull_runs_forward`), so a drop that appears just
+    after an account has run is claimed within minutes rather than an interval
+    later. The stamp is what keeps this polite: an offer that merely *remains*
+    free - sitting unclaimed behind a captcha, say - was stamped long ago and
+    never pulls anything again, so the account's own cadence stands.
+
+    `exclude_account_id` is the account whose run is doing the discovering, if
+    any: it is already at the store, so pulling its next run forward would only
+    schedule a second visit to learn what the current one is about to record.
     """
     adapter = get_adapter(store)
     offers = await adapter.list_free_offers()
     now = utcnow()
 
+    newly_free: list[Offer] = []
     for offer in offers:
-        row = (
-            db.query(Offer)
-            .filter(Offer.store == store, Offer.external_id == offer.external_id)
-            .first()
-        )
-        if row is None:
-            row = Offer(
-                store=store,
-                external_id=offer.external_id,
-                first_seen_at=now,
-            )
-            db.add(row)
-        row.title = offer.title
-        row.url = offer.url
-        row.image_url = offer.image_url
-        row.kind = offer.kind
-        row.starts_at = offer.starts_at
-        row.ends_at = offer.ends_at
-        row.source = offer.source
-        row.last_seen_at = now
+        row = _upsert_offer(db, store, offer, now)
+        if row.free_seen_at is None:
+            row.free_seen_at = now
+            newly_free.append(row)
+    # Committed before the pull so the new rows have ids for the ledger lookup.
+    db.commit()
+
+    if newly_free:
+        _pull_runs_forward(db, store, newly_free, exclude_account_id)
+        db.commit()
+    return offers
+
+
+async def discover_upcoming(db: Session, store: str) -> list[FreeOffer]:
+    """Record what a store has announced will become free. No browser either.
+
+    The backend half of the upcoming-games calendar: the rows land in `offers`
+    with `starts_at` in the future, which is the whole contract the interface
+    filters on. They are inert to claim runs by construction - `_do_run` builds
+    its pending list from the adapter's live `list_free_offers()` return and
+    only looks rows up by those ids - and `free_seen_at` stays null here, so
+    the moment the announcement turns into a live giveaway, `discover` sees an
+    unstamped row and treats it as newly free.
+    """
+    adapter = get_adapter(store)
+    offers = await adapter.list_upcoming_offers()
+    now = utcnow()
+    for offer in offers:
+        _upsert_offer(db, store, offer, now)
     db.commit()
     return offers
+
+
+def _pull_runs_forward(
+    db: Session,
+    store: str,
+    rows: list[Offer],
+    exclude_account_id: int | None = None,
+) -> None:
+    """A giveaway just went live: move this store's due times up to soon.
+
+    Only for accounts that are enabled, healthy and do not already have the
+    offer, only ever *earlier* than what the scheduler had planned, and with a
+    few minutes of random spread so several accounts do not arrive at the
+    store in the same instant. The per-account loop still owns the running;
+    this just brings the appointment forward.
+    """
+    now = utcnow()
+    accounts = (
+        db.query(Account)
+        .filter(
+            Account.store == store,
+            Account.enabled.is_(True),
+            Account.status == "ok",
+        )
+        .all()
+    )
+    for account in accounts:
+        if account.id == exclude_account_id:
+            continue
+        if not any(not _already_claimed(db, account.id, row.id) for row in rows):
+            continue  # this account has them all already
+        soon = now + timedelta(minutes=random.uniform(2.0, 10.0))
+        due = as_utc(account.next_run_at)
+        if due is not None and due <= soon:
+            continue  # already about to run anyway
+        account.next_run_at = soon
+        logger.info(
+            "A new giveaway is live on %s; pulled the next run for %r forward "
+            "to %s.",
+            store,
+            account.label,
+            soon.strftime("%H:%M"),
+        )
+
+
+def sweep_pending_checkouts(db: Session, fresh_stores: set[str] | None = None) -> None:
+    """Housekeeping for every "Finish the claim here" that is still waiting.
+
+    Two jobs, both about a marker whose whole point is a person who has not
+    come yet:
+
+    * **Expiry.** A giveaway that ended - or vanished from the store's list -
+      before the checkout was finished cannot be finished any more, so the
+      marker comes off, the miss gets a ledger row (`failed`, with no run: no
+      browser was opened, nothing was attempted, the clock simply won), and a
+      notification says what was lost. Leaving the marker would leave a
+      primary button that opens a checkout for a game that now costs money.
+    * **A reminder.** Once, when the offer is inside its last two days, so the
+      week does not run out silently. `checkout_reminded_at` is the stamp that
+      makes it once across restarts.
+
+    `fresh_stores` names the stores whose discovery succeeded just now; only
+    for those may a stale `last_seen_at` be read as "gone from the list",
+    because for any other store it may only mean the fetch failed.
+    """
+    now = utcnow()
+    fresh_stores = fresh_stores or set()
+    accounts = db.query(Account).filter(Account.checkout_offer.isnot(None)).all()
+    for account in accounts:
+        store_name = get_adapter(account.store).display_name
+        row = _offer_row(db, account.store, account.checkout_offer)
+        title = row.title if row is not None else account.checkout_offer
+        ends = as_utc(row.ends_at) if row is not None else None
+
+        ended = ends is not None and ends <= now
+        vanished = row is None or (
+            account.store in fresh_stores
+            and as_utc(row.last_seen_at) is not None
+            and as_utc(row.last_seen_at) < now - timedelta(hours=CHECKOUT_GONE_SLACK_H)
+        )
+        if ended or vanished:
+            detail = (
+                "The giveaway ended before the checkout was finished."
+                if ended
+                else "The giveaway is no longer listed, so the checkout can "
+                "no longer be finished."
+            )
+            _record(
+                db,
+                account,
+                None,  # no run: nothing was attempted, the offer went away
+                row,
+                outcome="failed",
+                detail=detail,
+                title=title,
+            )
+            _clear_checkout_marker(account)
+            db.commit()
+            logger.info(
+                "Account %s: the pending checkout for %r expired unfinished.",
+                account.id,
+                title,
+            )
+            notify.send_soon(
+                "attention",
+                notify.Notification(
+                    title=f"{account.label}: the claim for {title} was missed",
+                    detail=detail,
+                    severity="caution",
+                    context=store_name,
+                ),
+            )
+            continue
+
+        if (
+            ends is not None
+            and account.checkout_reminded_at is None
+            and ends <= now + timedelta(hours=CHECKOUT_REMINDER_WINDOW_H)
+        ):
+            remaining = ends - now
+            if remaining >= timedelta(hours=36):
+                left = "about 2 days"
+            elif remaining >= timedelta(hours=20):
+                left = "about a day"
+            else:
+                left = f"about {max(1, round(remaining.total_seconds() / 3600))} hours"
+            account.checkout_reminded_at = now
+            db.commit()
+            notify.send_soon(
+                "attention",
+                notify.Notification(
+                    title=f"{account.label}: {left} left to finish the claim",
+                    detail=(
+                        f"The checkout for {title} is still waiting for you. "
+                        "Press “Finish the claim here” on the account page "
+                        f"before the giveaway ends, or the game is missed."
+                    ),
+                    severity="caution",
+                    context=store_name,
+                ),
+            )
 
 
 def _offer_row(db: Session, store: str, external_id: str) -> Offer | None:
@@ -276,6 +486,24 @@ def _set_status(
     account.status_at = utcnow()
     account.status_screenshot = shot
     db.commit()
+
+
+def _clear_checkout_marker(account: Account) -> None:
+    """The pending checkout is settled: forget it everywhere it is written.
+
+    Does not commit. A blocked checkout leaves three things behind - the offer
+    id that lights the "Finish the claim here" button, the reminder stamp, and
+    the note riding on an otherwise-`ok` status - and clearing only the first
+    leaves a reminder for a claim already finished, or a caution sentence
+    under a healthy account. The note is only touched when the status is `ok`,
+    because that is the one state in which the reason can only be the checkout
+    note; a genuine `needs_attention` reason is somebody else's to clear.
+    """
+    account.checkout_offer = None
+    account.checkout_reminded_at = None
+    if account.status == "ok":
+        account.status_reason = None
+        account.status_screenshot = None
 
 
 async def check_session(account_id: int) -> tuple[bool, str]:
@@ -370,7 +598,7 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
         label = account.label
         row = _offer_row(db, store, external_id)
         if row is None:
-            account.checkout_offer = None
+            _clear_checkout_marker(account)
             db.commit()
             return False, "That offer is no longer listed, so there is nothing to confirm."
         offer = _free_offer_from_row(row)
@@ -417,7 +645,7 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
             )
             run.claimed += 1
             run.status = "ok"
-            account.checkout_offer = None
+            _clear_checkout_marker(account)
             _set_status(db, account, "ok", None, None)
             run.finished_at = utcnow()
             run.duration_s = (run.finished_at - started).total_seconds()
@@ -448,7 +676,13 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
         run.message = reason
         run.finished_at = utcnow()
         run.duration_s = (run.finished_at - started).total_seconds()
-        _set_status(db, account, "needs_attention", reason, shot)
+        # The marker stays so the button stays, and the sentence rides on the
+        # status - but as a note on `ok`, not as `needs_attention`. Parking the
+        # account here would stop every scheduled run over a checkout that is
+        # merely unconfirmed, and the next run's `is_owned` check settles the
+        # question either way. The person who closed the window is told by the
+        # finish-claim endpoint's own notification.
+        _set_status(db, account, "ok", reason, shot)
         db.commit()
         return False, reason
     finally:
@@ -490,10 +724,22 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             # fix in the selectors: it is the automation wall, and the remedy is
             # the un-driven window. Remember which offer, so the account page can
             # open that window straight on its checkout.
+            #
+            # The account stays `ok`, deliberately. `needs_attention` parks an
+            # account - the scheduler skips it until a person clears it - and
+            # that is right for a broken session, where every run would fail
+            # the same way. It is wrong here: the session is healthy and only
+            # this one offer is stuck, so parking would silently miss every
+            # *future* giveaway over one unanswered captcha. Later runs skip
+            # this offer (`_run_claims` never re-drives a blocked checkout)
+            # and claim everything else. The reason still rides along on
+            # `status_reason`, so the interface can say why the button is
+            # there without the scheduler reading it as a stop sign.
             run.status = "attention"
             run.message = exc.reason
             account.checkout_offer = exc.offer_id
-            _set_status(db, account, "needs_attention", exc.reason, exc.screenshot)
+            account.checkout_reminded_at = None  # a fresh block earns its own reminder
+            _set_status(db, account, "ok", exc.reason, exc.screenshot)
             image_path = (
                 str(settings.screenshots_path / exc.screenshot)
                 if exc.screenshot
@@ -573,7 +819,7 @@ async def _do_run(
     store = account.store
     adapter = get_adapter(store)
 
-    offers = await discover(db, store)
+    offers = await discover(db, store, exclude_account_id=account.id)
     run.offers_seen = len(offers)
     db.commit()
 
@@ -656,8 +902,26 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
             )
             run.already_owned += 1
             if account.checkout_offer == offer.external_id:
-                account.checkout_offer = None  # finished elsewhere; it is done
+                _clear_checkout_marker(account)  # finished elsewhere; it is done
             db.commit()
+            continue
+
+        # A checkout that already stopped one run at a captcha is not driven
+        # again: Epic refuses a captcha solve in this browser (measured -
+        # `epic.error.captcha.challenge.failed`), so re-driving it every few
+        # hours is a stream of failed challenge attempts against the account,
+        # which is the one pattern this app exists to avoid. The `is_owned`
+        # check above still ran, so the moment the person finishes it - in the
+        # un-driven window, or by buying it outright - the marker clears and
+        # the ledger gets its row. Until then: skip, and only log, because a
+        # ledger row per run for the same standing fact would be spam.
+        if account.checkout_offer == offer.external_id:
+            logger.info(
+                "Account %s: %r is still waiting on the un-driven checkout; "
+                "not driving it again.",
+                account.id,
+                offer.title,
+            )
             continue
 
         # An add-on needs the game it extends. Claiming a DLC into an account
@@ -685,7 +949,7 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
         if result.outcome in ("claimed", "already_owned") and (
             account.checkout_offer == offer.external_id
         ):
-            account.checkout_offer = None  # the block is resolved
+            _clear_checkout_marker(account)  # the block is resolved
         if result.outcome == "claimed":
             run.claimed += 1
             notify.send_soon(
@@ -809,7 +1073,7 @@ async def _satisfy_base_game(
 def _record(
     db: Session,
     account: Account,
-    run: Run,
+    run: Run | None,
     offer: Offer | None,
     outcome: str,
     detail: str | None = None,
@@ -831,11 +1095,15 @@ def _record(
     promotion: the base game bought so a free DLC could be used is a real claim
     with a real row, but it is not a giveaway and has no offer of its own.
     `title`, `kind` and `image_url` then say what it was.
+
+    `run` may be None too, for an outcome no visit produced: a pending
+    checkout that expired unfinished is written down by the housekeeping
+    sweep, which opened no browser and made no run.
     """
     claim = Claim(
         account_id=account.id,
         offer_id=offer.id if offer is not None else None,
-        run_id=run.id,
+        run_id=run.id if run is not None else None,
         store=account.store,
         title=title or (offer.title if offer is not None else "Unknown"),
         kind=kind or (offer.kind if offer is not None else "game"),

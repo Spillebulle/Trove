@@ -130,6 +130,10 @@ class Account(Base):
     # account is confirmed to own that offer. It is what lights the "Finish the
     # claim here" button, so it names the exact offer that window should open on.
     checkout_offer = Column(String(200), nullable=True)
+    # When the "about two days left to finish that checkout" reminder went out,
+    # so a restart cannot send it twice. Cleared with `checkout_offer`: a new
+    # blocked checkout earns its own reminder.
+    checkout_reminded_at = Column(DateTime, nullable=True)
 
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
@@ -170,6 +174,14 @@ class Offer(Base):
     # Where this row came from: a public aggregator feed, or the store's own
     # public endpoint. Kept so a wrong offer can be traced to its source.
     source = Column(String(40), nullable=False, default="store")
+
+    # The first time this offer appeared in the *free* list, as opposed to
+    # being announced for next week. Null for a row known only as upcoming.
+    # It is how "just became free" is told from "still free": the moment of
+    # stamping is the one moment the scheduler may pull runs forward for it,
+    # so an offer sitting free and unclaimed (blocked on a captcha, say) does
+    # not get every account's cadence pulled again on every discovery tick.
+    free_seen_at = Column(DateTime, nullable=True)
 
     first_seen_at = Column(DateTime, default=utcnow)
     last_seen_at = Column(DateTime, default=utcnow)
