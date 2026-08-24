@@ -3,17 +3,20 @@
 HomeLab Manager's `ADAPTER_MAP` is the model. A new store is a new module here
 and one line in the table, and nothing else in the app learns its name.
 
-There is one store today, on purpose. CLAUDE.md is explicit: one store, one
-account, one full loop, proven, before a second adapter exists. A second
-adapter written before the first loop works is a second adapter to rewrite.
+Epic came first and alone, per CLAUDE.md's rule: one store, one account, one
+full loop, proven, before a second adapter exists. That loop closed on 20 Aug
+2026, so itch.io is the second store - written against the shape the proven
+Epic claim exercised.
 """
 from __future__ import annotations
 
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
+from .itchio import ItchAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
+    "itchio": ItchAdapter,
 }
 
 __all__ = [
