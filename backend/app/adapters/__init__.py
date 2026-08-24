@@ -3,17 +3,21 @@
 HomeLab Manager's `ADAPTER_MAP` is the model. A new store is a new module here
 and one line in the table, and nothing else in the app learns its name.
 
-There is one store today, on purpose. CLAUDE.md is explicit: one store, one
-account, one full loop, proven, before a second adapter exists. A second
-adapter written before the first loop works is a second adapter to rewrite.
+Epic came first and alone, on purpose: CLAUDE.md required one store, one
+account, one full loop, proven, before a second adapter existed. That loop
+closed on 20 Aug 2026 (a real game claimed end to end), so Steam - the
+second store - now has an adapter. It claims only the rare "free to keep"
+promotions; see its module docstring for what that means and what it skips.
 """
 from __future__ import annotations
 
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
+from .steam import SteamAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
+    "steam": SteamAdapter,
 }
 
 __all__ = [
