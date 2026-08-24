@@ -28,6 +28,7 @@ import {
   PageHeader,
   Spinner,
   StatusBadge,
+  StoreBadge,
 } from '@/components/ui'
 
 export function Accounts() {
@@ -75,7 +76,6 @@ export function Accounts() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {(accounts.data ?? []).map((account) => {
-            const store = stores.data?.find((item) => item.store === account.store)
             return (
               <Link
                 key={account.id}
@@ -87,8 +87,10 @@ export function Accounts() {
                     <h2 className="truncate text-heading font-semibold text-strong">
                       {account.label}
                     </h2>
-                    <p className="truncate text-small text-dim">
-                      {store?.display_name ?? account.store}
+                    {/* The store's own mark beside its name, so two accounts on
+                        different stores tell apart before the words are read. */}
+                    <p className="flex items-center gap-1.5 text-small text-dim">
+                      <StoreBadge store={account.store} withName />
                     </p>
                   </div>
                   <StatusBadge

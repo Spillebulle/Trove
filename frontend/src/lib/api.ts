@@ -127,6 +127,20 @@ export const api = {
   offers: {
     list: (current = true) => request<Offer[]>(withQuery('/api/offers', { current })),
     refresh: () => post<Offer[]>('/api/offers/refresh'),
+    /**
+     * The offers as an .ics file, as a blob for the page to hand the browser.
+     *
+     * Fetched rather than linked so the session cookie goes with it: the
+     * endpoint is authenticated like every other, and a bare `<a href>` from
+     * a calendar app would arrive with no session at all.
+     */
+    calendar: async (): Promise<Blob> => {
+      const response = await fetch('/api/offers/calendar.ics', { credentials: 'same-origin' })
+      if (!response.ok) {
+        throw new ApiError('The calendar could not be built.', response.status)
+      }
+      return response.blob()
+    },
   },
 
   claims: {

@@ -19,12 +19,20 @@
  */
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Gift, RefreshCw } from 'lucide-react'
+import { CalendarPlus, Gift, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import type { Offer } from '@/lib/types'
 import { fullTime, isUpcoming, relativeTime, shortDate, timeLeft } from '@/lib/utils'
-import { EmptyState, ErrorState, KindBadge, PageHeader, Panel, Spinner } from '@/components/ui'
+import {
+  EmptyState,
+  ErrorState,
+  KindBadge,
+  PageHeader,
+  Panel,
+  Spinner,
+  StoreBadge,
+} from '@/components/ui'
 
 /** "Free from Thu 28 Aug to Thu 4 Sep" - the offer's window, as a sentence. */
 function freeWindow(offer: Offer): string {
@@ -67,6 +75,23 @@ export function Offers() {
     onError: (error: Error) => push(error.message, 'critical'),
   })
 
+  // The .ics download. Fetched rather than linked so the session cookie goes
+  // with it, then handed to the browser as an ordinary file save. It is a
+  // snapshot to import, not a feed to subscribe to - a calendar app polling a
+  // URL sends no cookie, and the endpoint is authenticated on purpose.
+  const calendar = useMutation({
+    mutationFn: api.offers.calendar,
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'trove-offers.ics'
+      anchor.click()
+      URL.revokeObjectURL(url)
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
   const freeNow = (offers.data ?? []).filter((offer) => !isUpcoming(offer, now))
   const upcoming = (offers.data ?? [])
     .filter((offer) => isUpcoming(offer, now))
@@ -80,16 +105,28 @@ export function Offers() {
         title="Free now"
         subtitle="What the stores are giving away. Checking this costs nothing and touches no account."
         actions={
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending}
-            title="Ask every store what is free right now."
-          >
-            {refresh.isPending ? <Spinner /> : <RefreshCw className="size-icon" />}
-            Check the stores
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => calendar.mutate()}
+              disabled={calendar.isPending}
+              title="Save the announced giveaways and the deadlines as calendar events."
+            >
+              {calendar.isPending ? <Spinner /> : <CalendarPlus className="size-icon" />}
+              Download calendar (.ics)
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+              title="Ask every store what is free right now."
+            >
+              {refresh.isPending ? <Spinner /> : <RefreshCw className="size-icon" />}
+              Check the stores
+            </button>
+          </>
         }
       />
 
@@ -153,7 +190,7 @@ export function Offers() {
                       </h2>
 
                       <p className="mt-0.5 flex items-center gap-2 text-small text-dim">
-                        <span className="capitalize">{offer.store}</span>
+                        <StoreBadge store={offer.store} withName />
                         {/* An add-on is worth a badge rather than a word: it is the
                             one kind that may not be claimable on its own, and the
                             card should say so at a glance. */}
@@ -233,12 +270,13 @@ export function Offers() {
                         <KindBadge kind={offer.kind} />
                       </span>
                       <span
-                        className="block truncate text-small text-dim"
+                        className="mt-0.5 flex items-center gap-1.5 text-small text-dim"
                         title={fullTime(offer.starts_at)}
                       >
-                        <span className="capitalize">{offer.store}</span>
-                        {' · '}
-                        {freeWindow(offer)}
+                        {/* The mark alone; the tooltip carries the store's
+                            name, and the window is the part worth the width. */}
+                        <StoreBadge store={offer.store} />
+                        <span className="truncate">{freeWindow(offer)}</span>
                       </span>
                     </span>
                     <span
