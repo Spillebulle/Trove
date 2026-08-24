@@ -16,7 +16,7 @@ name: Container smoke test
 
 on:
   push:
-    branches: [main, 'container/**']
+    branches: [main, 'container/**', 'claude/**']
     tags-ignore: ['**']
   pull_request:
   workflow_dispatch:
@@ -103,6 +103,20 @@ jobs:
         run: |
           docker cp tools/cookie_persist.py trove:/tmp/cookie_persist.py
           docker exec -e PYTHONPATH=/app -u pwuser -w /app trove python /tmp/cookie_persist.py
+
+      - name: The automatic finish fires when the window goes away (auto_finish)
+        # Epic's checkout ends by closing its own window while Chrome lives - a
+        # black Xvfb - and `open_local(auto_finish=True)` is the watcher written
+        # against the one real claim's log, never yet seen firing. This produces
+        # that exact observable state on the container's display (the un-driven
+        # window opened the way finish-claim opens it, then unmapped via xdotool
+        # with the process alive - the state is verified, not assumed) and
+        # asserts the watcher does not fire while a window is visible, then
+        # closes the browser, runs on_closed and releases the profile lock once
+        # it is not. The poll-by-poll log is the measurement; read it.
+        run: |
+          docker cp tools/auto_finish_sim.py trove:/tmp/auto_finish_sim.py
+          docker exec -e PYTHONPATH=/app -u pwuser -w /app trove python /tmp/auto_finish_sim.py
 
       - name: Which way did the sandbox go? (and does "on" still launch)
         # The default probe above already decided; this prints it, then forces
