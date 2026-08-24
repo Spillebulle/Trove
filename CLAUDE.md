@@ -791,6 +791,60 @@ to a stopped app.
   and free-to-play adds, claimed from the store page. Do not build Steam as if
   it were Epic. Steam Guard makes an unattended login unrealistic, which is
   another reason sessions matter more than credentials.
+
+  **Built (`adapters/steam.py`), scoped to free-to-keep only:** a normally-paid
+  game temporarily 100 % off that stays in the library. Not free-to-play, not
+  free weekends (trials). The claim is one "Add to Account" click in a
+  signed-in session — the same free-license grant ArchiSteamFarm's
+  `addlicense` has done at scale for years. What was measured against the live
+  store (24 Aug 2026), all from Steam's own endpoints (no Reddit/SteamDB —
+  their terms are unchecked):
+
+  1. **Discovery is `search/results/?maxprice=free&specials=1&infinite=1`**
+     (JSON: `{success, results_html, total_count}`). `specials=1` = a discount
+     is running, `maxprice=free` = the discounted price is free; together that
+     is "discounted to nothing". Measured `total_count: 0` on the day — the
+     normal state, these promos are rare. The `json=1` variant of the same
+     search is a trap: it returns only `{name, logo}` per item (measured), no
+     appid and no price, so it cannot identify anything.
+  2. **The result rows** (measured against 25 live specials rows) carry
+     `data-ds-appid`, `<span class="title">`, `data-discount` (pct) and
+     `data-price-final` (cents); package/bundle rows carry
+     `data-ds-packageid`/`data-ds-bundleid` instead and are skipped — no
+     appdetails to confirm them against.
+  3. **`api/appdetails?appids=N` is the positive identification.** Measured: a
+     38 %-off paid game answers `is_free: False`, `price_overview:
+     {discount_percent: 38, final: 495}`; a free-to-play game answers
+     `is_free: True` with **no** `price_overview`. So free-to-keep is
+     `discount_percent == 100 and final == 0` — and that is also what tells it
+     from a free *weekend*, whose `price_overview` keeps the real price (the
+     weekend is playtime, not a discount). Anything unconfirmable is skipped
+     with a log line, never claimed.
+  4. **`api/featuredcategories` has a `specials` bucket** whose items carry
+     `discount_expiration` (unix) — the only end date any of these endpoints
+     states; it fills `ends_at` best-effort. Its `discount_percent` field
+     would also show a 100 but the bucket is only ten curated items, so it is
+     not the discovery path.
+  5. **The age gate is a form, not a challenge** (measured on
+     `/agecheck/app/1091500/`): selects `#ageDay` ("1"…), `#ageMonth`
+     ("January"…), `#ageYear` ("1900"…), then `#view_product_page_btn` "View
+     Page". `steam._pass_age_gate` steps through it; skipping it would make
+     every age-rated giveaway unclaimable.
+  6. **The "Add to Account" control, measured signed-out:** a
+     `div.btn_addtocart.btn_addtoaccount` holding a `span[role="button"]`
+     whose `onclick` is a free-license action (`AddFreeBundle(id, name)` on
+     the measured pages; `AddFreeLicense` is the single-package sibling),
+     tooltip "This game is available for free to your account." Paid purchase
+     is `addToCart`/`addBundleToCart` and is refused outright.
+     `steam._assert_free_click` is the money guard: a click must prove itself
+     free either structurally (a free-license action, which cannot charge) or
+     by the block's own `-100%` / Free price — otherwise nothing is clicked
+     and the run stops with a screenshot.
+
+  Signed-out nav (measured): `#global_action_menu` holds the "Sign in" link to
+  `/login/`; `#account_pulldown` (the signed-in discriminator) appears nowhere
+  signed-out. The owned marker and the post-click confirmation wording could
+  not be measured without a session/promo — see "Written and NOT verified".
 - **EA (EA app / Origin)** and **Ubisoft Connect** — infrequent giveaways; worth
   an adapter only after the first two work end to end.
 
@@ -798,6 +852,11 @@ One store, one account, one full loop is done. **A second adapter should still
 wait** until Epic's checkout has claimed something real, because the checkout is
 the only part of the contract no adapter has exercised yet, and a second store
 written against an unproven shape is a second store to rewrite.
+
+That condition was met on 20 Aug 2026 (the claim above), so the Steam adapter
+is now written — the second store, against the proven contract shape. Its
+discovery is measured live; its page-driving half is not (no promo was
+running), and the unverified list below says exactly which parts.
 
 ## Commands
 
@@ -981,6 +1040,21 @@ session trusting something nobody has run.
   no window manager at all, measured by the probe in the container without
   any focus emulation. So the container case `live.enable_focus` was kept for
   is also not a case where it changes anything observed.
+- **Steam's discovery endpoints and the adapter's parsers** (24 Aug 2026,
+  live): the `infinite=1` search envelope and its row markup (25 real rows
+  parsed: appid, title, discount, price), that `maxprice=free&specials=1`
+  answered `total_count: 0` with no promo running (the normal state), that
+  the `json=1` search variant carries no appid or price and is useless,
+  `appdetails`' field shapes for a paid-discounted game (38 %/495) and a
+  free-to-play one (`is_free` with no `price_overview`) — both correctly
+  refused by `_confirm_free_to_keep`, run live — `featuredcategories`'
+  `discount_expiration`, the age-gate form at `/agecheck/app/…` (`#ageDay`/
+  `#ageMonth`/`#ageYear`, `#view_product_page_btn`), the signed-out nav
+  (`#global_action_menu` "Sign in" link, no `#account_pulldown` anywhere
+  signed-out), and the "Add to Account" anatomy on live pages
+  (`btn_addtoaccount`, `span[role="button"]`, `onclick="AddFreeBundle(…)"`,
+  vs `addToCart` for money). `list_free_offers` has been run against the live
+  store and returned `[]` on a promo-less day without error.
 
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
@@ -1086,6 +1160,25 @@ window. See the two paragraphs on it above.
   on the bundled Chromium and there is no reason to think it can on Chrome; the
   un-driven window exists because of that. If a future session wants to claim
   otherwise it needs a screenshot of a ticked checkbox, not an argument.
+- **The Steam adapter's free-to-keep branch and everything page-side that
+  needs a session or a live promotion.** No free-to-keep promo was running on
+  24 Aug 2026 (`total_count: 0`, and they are rare), so the following are
+  written from the measured field *shapes* and community knowledge, not from
+  observation, and every one fails safe (skip + log, or stop + screenshot,
+  never a claim): that a 100 %-off game's `appdetails` really answers
+  `discount_percent: 100, final: 0` (the identification `_confirm_free_to_keep`
+  requires — if a real promo presents differently, discovery skips it and the
+  log line names the appid to measure); that a free *weekend* keeps its real
+  price in `price_overview` (the reasoning for how the two are told apart);
+  the exact purchase block a 100 %-off game renders and therefore the
+  `ADD_TO_ACCOUNT` selector that will match it; the post-click confirmation
+  wording (`CONFIRMED` — ownership is the ground truth, Epic's pattern, so a
+  wrong guess costs one extra page load); the owned marker
+  (`game_area_already_owned` / "already in your Steam library", which only
+  renders signed-in); and `#account_pulldown` as the signed-in marker (its
+  signed-out *absence* is measured; its signed-in presence is not). The first
+  live promotion against a signed-in account is the measurement for all of
+  it, and `steam.py`'s log lines say what was actually found.
 - **Focus emulation.** `Emulation.setFocusEmulationEnabled` is called for both
   the live view and runs, and on headed Chromium on Windows it changes nothing
   measurable: `document.hasFocus()` was already `true` with the window
