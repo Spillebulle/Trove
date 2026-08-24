@@ -828,6 +828,63 @@ to a stopped app.
   Everything session-bound in the adapter - the card scan, every selector, the
   claim loop, the key reveal - is **written, not verified**; see below.
 - **GOG** — occasional giveaways, usually a simple claim on the promo page.
+- **GOG** — built (adapter `adapters/gog.py`), written while **no giveaway was
+  live**, so the discovery plumbing is measured and the giveaway-specific
+  halves are code-derived; the first live giveaway is the measurement. What
+  was measured off the live service (24 Aug 2026):
+
+  1. **Discovery is the sections API the front page is assembled from.**
+     `GET https://sections.gog.com/v1/pages/2f?countryCode=US&locale=en-US&
+     currencyCode=USD` answers 200 JSON to a plain client with Trove's own
+     user agent - no session, no key. `2f` is the URL-encoded page path `/`.
+     The body is `{"config": {...}, "sections": [{"sectionId", "sectionType",
+     ...}]}`; a giveaway is `sectionType: "GIVEAWAY_SECTION"` (the store's own
+     enum in its Angular bundle names it; today's page had none). A section's
+     content is `GET .../pages/2f/sections/<sectionId>?<same params>` →
+     `{"properties": ..., "colors": ...}` (measured on a live
+     TAKEOVER_SECTION), and product DTOs in it carry the stable numeric
+     `id` ("1889754300"), `title`, `slug` (underscored), `coverHorizontal` -
+     the id is `external_id`, never the slug or title.
+  2. **The banner's renderer was read in full** (its lazy chunk,
+     `4427.s_*.js`): it reads exactly `properties.endDate` (fed to JS
+     `Date.parse`) and `properties.product.{title,slug,coverHorizontal}`;
+     renders container `id="giveaway"` with states
+     `giveaway__content--{loading,claimed,ready}`; one button
+     `.giveaway__button` labelled **"Add to library"**; success text
+     "Success! <title> was added to your library."; error text "Something
+     went wrong. Please try again."; product URL built as
+     `/{lang}/game/{slug with - → _}`.
+  3. **The claim wire calls, from the store's own code:** the button does
+     `POST https://www.gog.com/giveaway/claim` (bearer token, empty JSON) and
+     navigates to `/giveaway/thank-you` on success.
+     `GET https://www.gog.com/giveaway/status` answers `{"isClaimed": bool}`
+     for a signed-in session - measured unauthenticated: 401
+     `{"message":"Unauthorized"}`. The adapter clicks the button (the honest
+     path; the store attaches token and consent) and uses `status` only to
+     *confirm* the outcome afterwards.
+  4. **Claiming subscribes the account to GOG's marketing newsletter.** The
+     consent is the button, verbatim from the banner's template: "By clicking
+     the 'Add to library' button, I agree to receive marketing communications
+     from GOG...". Trove says so in the blurb and requirements and must never
+     touch the newsletter settings itself - that consent is the person's to
+     manage on GOG.
+  5. **The session check is `/user/data/games`, not the menu.** The menu is
+     rendered client-side (unmeasurable without a browser), but
+     `GET https://www.gog.com/user/data/games` signed out 302s to
+     `https://www.gog.com/en##openlogin` (measured); signed in it returns the
+     library as JSON with an `owned` list of product ids (community
+     knowledge - lgogdownloader and friends read it - **shape unverified
+     here**, parsed defensively: anything unexpected is "could not tell",
+     never an empty library). That list is also `is_owned`, and a genuine
+     miss there is a real `False` - the list is authoritative for a signed-in
+     session.
+  6. **Login is `login.gog.com`** (200, lands on `/login`, classic
+     `login[username]` + password form) **with Google reCAPTCHA** (measured:
+     recaptcha.net script on the page) - so first sign-in needs a person,
+     same as Epic. `signin_url` is `https://www.gog.com/#openlogin`, the same
+     URL GOG itself bounces a signed-out account to; `checkout_url` is the
+     front page, because the banner *is* the checkout - there is no separate
+     giveaway page (`/giveaway` alone is a 404, measured).
 - **Steam** — has no weekly giveaway; what exists is "free to keep" promotions
   and free-to-play adds, claimed from the store page. Do not build Steam as if
   it were Epic. Steam Guard makes an unattended login unrealistic, which is
@@ -900,6 +957,12 @@ That condition was met on 20 Aug 2026 (the claim above), so the Steam adapter
 is now written — the second store, against the proven contract shape. Its
 discovery is measured live; its page-driving half is not (no promo was
 running), and the unverified list below says exactly which parts.
+
+That condition was met on 20 Aug 2026 (the end-to-end Epic claim above), so
+the GOG adapter is now built against the proven contract shape. Its own
+end-to-end run - a live giveaway discovered, claimed, and written to the
+ledger - has not happened yet; see the GOG entries under "What is verified
+and what is not".
 
 ## Commands
 
@@ -1113,6 +1176,20 @@ session trusting something nobody has run.
   still opens no browser. Also Prime's claim loop at the same level: one
   click then only reads, a revealed key comes back on the result with its
   store, and a link wall stops before any click, naming the missing link.
+- **GOG's discovery plumbing, against the live service** (24 Aug 2026): the
+  sections API (`sections.gog.com/v1/pages/2f`) answers a plain client with
+  Trove's own user agent, its envelope and a section-content body were read
+  live (`{"properties","colors"}`, product DTO with stable `id`, `slug`,
+  `coverHorizontal`), `GIVEAWAY_SECTION` is a real section type in GOG's own
+  bundle, and `adapters/gog.list_free_offers()` was **run live**: one request,
+  200, zero offers - correct, because no giveaway was running. The parser was
+  additionally exercised on the measured product DTO with the renderer's
+  giveaway fields and produced a correct offer (stable id, product URL,
+  UTC `ends_at`), and skips a body with no product id rather than inventing
+  an identity. Also measured: `/giveaway/status` unauthenticated → 401
+  `{"message":"Unauthorized"}`; `/user/data/games` signed out → 302 to
+  `/en##openlogin`; `login.gog.com` → `/login` with `login[username]` and
+  Google reCAPTCHA; `/giveaway` alone → 404.
 
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
@@ -1204,6 +1281,27 @@ window. See the two paragraphs on it above.
   rather than from a screenshot, so it is itself unproven. The `cta=` and
   `claimable=` values in the `Epic: %r needs %r` log line are what say whether
   the rest of it reads correctly; that line is the thing to look at next.
+- **Everything GOG-specific that needs a live giveaway or a signed-in GOG
+  session.** No giveaway was running and no GOG account was signed in when the
+  adapter was written, so the following are code-derived (from GOG's own
+  bundle, which was read rather than guessed at) and not yet observed:
+  the giveaway *section body* itself (the parser is written against the
+  renderer's exact reads: `properties.endDate`,
+  `properties.product.{title,slug,coverHorizontal}`, plus the measured
+  sibling-section product DTO for `id`); the banner selectors
+  (`#giveaway`, `.giveaway__button` "Add to library",
+  `giveaway__content--claimed`, the success and error texts - all verbatim
+  from the renderer's template, never seen rendered); the signed-in shape of
+  `/user/data/games` (an `owned` list - community knowledge; the signed-out
+  redirect is measured, the signed-in half is parsed defensively and an
+  unexpected shape reads as "could not tell"); the signed-in
+  `/giveaway/status` body (`{"isClaimed": bool}`, from the store's own
+  handler code); and whether GOG ever challenges the driven browser at the
+  claim (the guard raises `CheckoutBlocked` to the un-driven window if it
+  does, the already-proven remedy). Each of these logs what it actually
+  found, so the first live GOG giveaway on a signed-in account is the
+  measurement - fix the selectors and shapes from that run's log rather than
+  re-deriving them.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in
