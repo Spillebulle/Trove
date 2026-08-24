@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.19. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.23. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -418,9 +418,25 @@ end for checkout; do not try to make it pass, and do not confuse the `400`
 un-driven window.** When Epic raises a captcha at checkout, `epic._handle_challenge`
 no longer waits for a driven solve (`_CaptchaWaiter`, now unused by Epic) - it
 raises `browser.CheckoutBlocked`, a `NeedsAttention` subclass carrying the
-offer's id. The runner records `account.checkout_offer` and files the account
-with the remedy, and the account page shows a primary **"Finish the claim
-here"** button. That button (`POST /api/accounts/{id}/finish-claim`) opens the
+offer's id. The runner records `account.checkout_offer` and the account page
+shows a primary **"Finish the claim here"** button.
+
+**A blocked checkout does not park the account (0.1.23).** It used to be filed
+`needs_attention`, which the scheduler skips forever - so one missed captcha
+week silently parked the account for every future giveaway, since nothing that
+could clear the flag ever ran. `needs_attention` is right for a broken session
+(every run would fail the same way) and wrong for one stuck offer on a healthy
+one. Now the account stays `ok` with the reason riding on `status_reason`,
+later runs still check ownership (a copy finished by hand, or bought outright,
+is recorded `already_owned` and clears the marker) but **never re-drive the
+blocked checkout** - Epic refuses a captcha solve in this browser, measured, so
+re-driving every few hours would be a stream of failed challenges, the one
+pattern the app exists to avoid. The housekeeping tick (below) sweeps the
+pending checkouts: a giveaway that ends unfinished gets a `failed` ledger row
+with no run (nothing was attempted; the clock won) and the marker comes off,
+and inside the last 48 hours one reminder goes out, stamped in
+`checkout_reminded_at` so a restart cannot repeat it. Scheduler start unparks
+accounts older builds left stuck this way. That button (`POST /api/accounts/{id}/finish-claim`) opens the
 account's profile in the **same un-driven window as sign-in** (`manager.open_local`,
 holder "a sign-in window", no CDP), only pointed at the offer's
 `/purchase?offers=…` page via `adapter.checkout_url`. The person presses "Add
@@ -618,6 +634,23 @@ Four concerns, kept thin, mirroring HomeLab's split. Where each one lives:
   handling of in-flight child tasks. `next_run_at` is **persisted**, not
   computed from `last_run_at` plus an interval, so a restart cannot re-roll the
   jitter and bunch every account onto the same minute.
+
+  Beside the per-account loops sits **one global housekeeping tick**
+  (`scheduler._housekeep`, every `discovery_interval_hours`, default 3 h,
+  jittered ±20 %), and the split is principled: everything in it is
+  sessionless - discovery and the upcoming list are one HTTP request per
+  store, the checkout sweep is database-only - so nothing in it can be slow
+  with a store session or get anybody flagged. Its point is the drop:
+  `discover` stamps `Offer.free_seen_at` the first time an offer appears in
+  the *free* list (including one known until then only as next week's
+  announcement), and on that one moment pulls the store's healthy accounts'
+  `next_run_at` forward to minutes - only ever earlier, and never again for
+  an offer that merely *remains* free, so an offer sitting behind a captcha
+  cannot re-pull anybody's cadence. Backfilled on upgrade
+  (`free_seen_at = first_seen_at`) so the first tick after an update cannot
+  read the whole table as newly free. A broken feed degrades to the
+  per-account cadence, never to a stopped app - the claim runs still discover
+  for themselves.
 - **Store adapters** (`adapters/`) — one per store behind a small contract, with a
   single `ADAPTER_MAP` registration point: `list_free_offers()`, `health(page)`,
   `is_owned(page, offer)`, `claim(page, offer)`. Every adapter declares what it
@@ -661,6 +694,24 @@ to a stopped app.
   clicking "Get" on the product page, because the product page renders the same
   checkout in a cross-origin iframe and driving that breaks whenever Epic
   changes the container.
+
+  **The same payload names next week's giveaway (0.1.23).** The elements carry
+  `upcomingPromotionalOffers` beside the running ones, and the two-condition
+  price filter cannot be reused on them: an upcoming giveaway usually still
+  lists full price (its discount has not started), while the Mage Bundle
+  listed 0 before its week - the price says nothing reliable about next week.
+  What does is the upcoming window's own `discountSetting.discountPercentage
+  == 0`, which is what `_parse_upcoming_element` filters on; an element with a
+  *running* promotion is left to the free parser so one element never becomes
+  two disagreeing rows. `runner.discover_upcoming` records them as ordinary
+  `Offer` rows with `starts_at` in the future - which is the whole contract:
+  the offers page's "Coming up" schedule filters on `starts_at > now`, claim
+  runs are inert to them by construction (the pending list is built from the
+  live `list_free_offers()` return only), and when the announcement turns
+  free, the same row (`external_id` is the identity) is seen unstamped by
+  `discover`, which is exactly what fires the pull-forward on the drop.
+  Measured against the live endpoint: free and upcoming disjoint, and the
+  upcoming set matched the store's own "coming soon" tiles.
 
   Three things learned by running it. The `-ipv4` promotions host is deliberate:
   the plain hostname resolves to an IPv6 address a default Docker network cannot
@@ -957,12 +1008,38 @@ window. See the two paragraphs on it above.
   end-to-end claim was finished by pressing Done. The display watch that should
   make that unnecessary - close the window when the browser has had no window
   for eight seconds - is written against exactly what that claim's log showed
-  (a live Chrome process with its window gone) but has not itself been seen to
-  fire. If it does not, its own log line says what was on the screen instead,
-  which is the measurement to write the next version against. Pressing Done is
-  unaffected either way.
+  (a live Chrome process with its window gone). **It has now been seen to
+  fire, in simulation (0.1.23):** `tools/auto_finish_sim.py` produces the
+  exact end-state (`xdotool windowunmap` with the process alive, the state
+  verified rather than assumed) and asserts the latch held while a window was
+  visible, `on_closed` ran inside the poll budget and not before it, the
+  browser was terminated and the profile lock actually reopened. Rehearsed
+  green on a bare Xvfb with Chromium standing in for Chrome (`--class=chrome`
+  forced; real Chrome's WM_CLASS `Google-chrome` matches `window_titles` on
+  its own - and note the corollary: a plain-named Chromium un-driven window
+  would never arm the watch, failing safe to "press Done", which cannot occur
+  in the shipped container since the image installs real Chrome), and the
+  smoke workflow runs the same sim against the real image on every push. What
+  is still unproven is the thing itself: the watch firing on a real claim,
+  where it is Epic taking the window away rather than xdotool. If it does
+  not, its own log line says what was on the screen instead, which is the
+  measurement to write the next version against. Pressing Done is unaffected
+  either way.
 - **A second claim of any kind.** One claim is one sample: it proves the path
   exists, not that it is reliable. The next weekly giveaway is the test.
+- **The 0.1.23 unattended hardening, against a live week.** The pieces are
+  tested at the unit level against throwaway databases (blocked checkouts do
+  not park and are unparked on start, the sweep expires and reminds exactly
+  once, the pull-forward moves only healthy accounts and only on a genuinely
+  new drop, upcoming rows never enter a claim run) and the upcoming parser is
+  measured against the live endpoint - but none of it has yet run through a
+  real giveaway week: the drop firing the pull-forward, the reminder landing
+  in Discord, an unfinished checkout actually expiring. The next Thursday is
+  the measurement. One deliberate behavior worth knowing before it surprises
+  somebody: a run whose checkout is blocked *skips* that offer on every later
+  run rather than re-driving it, so the ledger shows no new rows for it -
+  that is the app declining to hammer Epic with challenge attempts, not a
+  run failing to see the offer.
 - **The DLC page-reading half.** The add-on/base-game *data* is measured off
   the live endpoint (see the Epic notes), and the URL fix is proven against it.
   What is written from reasoning rather than observation is what
