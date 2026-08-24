@@ -827,7 +827,60 @@ to a stopped app.
 
   Everything session-bound in the adapter - the card scan, every selector, the
   claim loop, the key reveal - is **written, not verified**; see below.
-- **GOG** — occasional giveaways, usually a simple claim on the promo page.
+- **itch.io** — built (`adapters/itchio.py`). itch.io runs frequent 100%-off
+  sales: a normally-paid game claimed while the sale runs stays in the library
+  for keeps, which is a different thing from itch's ordinary free games (those
+  are just downloadable or browser-playable, with nothing to claim). Two
+  things set this store apart from Epic and both shape the adapter.
+  **Volume:** measured 24 Aug 2026, 16 of the 36 games on the first
+  `/games/on-sale` page were at -100% at once; discovery is capped at
+  `itchio.MAX_OFFERS` (20) per run and **logs** what it dropped - the rest
+  return on later runs while their sales last. **Terms:** automated claiming
+  may be against itch.io's terms of service; the blurb says so plainly (the
+  same honesty the README owes Epic) and the add-account page carries it as a
+  requirement the person accepts.
+
+  Measured against the live site (24 Aug 2026), all of it sessionless:
+
+  - `https://itch.io/games/on-sale?format=json` answers
+    `{"content": "<grid html>", "num_items": 36, "page": N}` - the cell markup
+    without the page chrome - and answers a plain `Trove/0.1` user agent, so
+    no browser UA is worn. Each cell carries `data-game_id` (numeric, the
+    `external_id`; slugs are not stable, a developer can rename the page
+    mid-sale), a title link, a `price_tag … sale` link to the sale page at
+    `/s/<sale_id>/<slug>`, `price_value` ("$0"), `sale_tag` ("-100%", lesser
+    discounts, or "In bundle"), and the cover in `data-lazy_src`. The filter
+    needs both halves: `sale_tag` exactly "-100%" AND a zero price.
+  - **itch.io serializes a tag's attributes in a different order on different
+    requests.** The same cell arrived once class-then-href and minutes later
+    href-then-class, so an order-assuming regex parsed one response and
+    returned nothing for the next - which presents as discovery working
+    "sometimes". `itchio._links` parses whole `<a>` tags and reads the
+    attributes separately; keep it that way.
+  - The sale page carries its own end time as ISO 8601 in `promotion_dates`
+    (`Ends <span class="date_format">2026-09-20T13:07:00Z`), which is where
+    `ends_at` comes from - one extra GET per *kept* offer, spaced by
+    `POLITE_DELAY_S`, so discovery costs at most 1 + `MAX_OFFERS` cheap
+    requests. A single-game sale page also carries the buy button
+    (`buy_game_btn`, `data-game` JSON with `min_price` in cents and
+    `actual_price`, label "Download or claim"): positive `min_price`,
+    `actual_price` 0 and "claim" in the label is the claimable-to-keep shape,
+    stored as the `claimable` hint in `extra`. A **multi-game** sale page has
+    no buy button at all (measured on `/s/197970/summer-sale`) - its games
+    claim from their own pages - so the hint honestly stays `None` and
+    `claim()` establishes it.
+  - `/game/purchase/<game_id>` 302s to `<game_url>/purchase`, the
+    pay-what-you-want form, whose free path is the link **"No thanks, just
+    take me to the downloads"** (exact measured wording). The claim flow only
+    ever clicks the buy button (which opens that form and orders nothing),
+    that link, and a control labelled "claim" - it never fills an amount and
+    never touches a pay control, which is what guarantees no money moves.
+
+  The signed-in half - the header markers, the "You own this" banner, the
+  claim control on the download page - is written from how the flow is known
+  to work (ItchClaim proves claiming works over plain authenticated HTTP),
+  not from measurement; see "What is verified and what is not".
+
 - **GOG** — built (adapter `adapters/gog.py`), written while **no giveaway was
   live**, so the discovery plumbing is measured and the giveaway-specific
   halves are code-derived; the first live giveaway is the measurement. What
@@ -946,23 +999,18 @@ to a stopped app.
 - **EA (EA app / Origin)** and **Ubisoft Connect** — infrequent giveaways; worth
   an adapter only after the first two work end to end.
 
-One store, one account, one full loop is done. The condition this file set for
-a second adapter - Epic's checkout claiming something real - was met on 20 Aug
-2026, and **Prime Gaming is that second adapter**. It is also the store that
-forced the one contract extension (`discovery_needs_session`), which is why it
-came before GOG: if the contract was going to bend anywhere, better to find
-out on the second store than the fourth.
-
-That condition was met on 20 Aug 2026 (the claim above), so the Steam adapter
-is now written — the second store, against the proven contract shape. Its
-discovery is measured live; its page-driving half is not (no promo was
-running), and the unverified list below says exactly which parts.
-
-That condition was met on 20 Aug 2026 (the end-to-end Epic claim above), so
-the GOG adapter is now built against the proven contract shape. Its own
-end-to-end run - a live giveaway discovered, claimed, and written to the
-ledger - has not happened yet; see the GOG entries under "What is verified
-and what is not".
+One store, one account, one full loop is done. The rule was that **a second
+adapter waits** until Epic's checkout claimed something real, because a second
+store written against an unproven contract shape is a second store to rewrite.
+That condition was met on 20 Aug 2026 (the real claim above), and the second
+wave - GOG, Steam, Prime Gaming and itch.io - is now written against the
+proven shape. Prime is the store that forced the one contract extension
+(`discovery_needs_session`): if the contract was going to bend anywhere,
+better to find out now than on the sixth store. Each new adapter's sessionless
+discovery is measured live where the store allowed it; every signed-in half is
+written, not verified, and the unverified list below says exactly which parts.
+None of the four has claimed anything real yet - each store's first live
+giveaway is its measurement.
 
 ## Commands
 
@@ -1190,6 +1238,15 @@ session trusting something nobody has run.
   `{"message":"Unauthorized"}`; `/user/data/games` signed out → 302 to
   `/en##openlogin`; `login.gog.com` → `/login` with `login[username]` and
   Google reCAPTCHA; `/giveaway` alone → 404.
+- **itch.io discovery, against the live site** (24 Aug 2026): the on-sale
+  JSON listing and its cell shape, the -100%-plus-zero-price filter, the
+  volume that motivates the cap (16 of 36 first-page games at -100% at once),
+  the sale-page end times and `data-game` buy-button shape, the
+  attribute-order shuffle between responses (the trap in the per-store
+  notes), that the listing answers a plain `Trove/0.1` user agent, and a
+  full `list_free_offers()` run returning 11 offers with numeric ids,
+  covers, UTC end times and claimability hints. The signed-in half is not
+  verified - see below.
 
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
@@ -1250,6 +1307,23 @@ window. See the two paragraphs on it above.
   not, its own log line says what was on the screen instead, which is the
   measurement to write the next version against. Pressing Done is unaffected
   either way.
+  (a live Chrome process with its window gone) but has not itself been seen to
+  fire. If it does not, its own log line says what was on the screen instead,
+  which is the measurement to write the next version against. Pressing Done is
+  unaffected either way.
+- **The itch.io signed-in flow, all of it.** Discovery is measured (see the
+  per-store notes); everything behind a login is not, because there is no
+  itch.io account here: the signed-in header markers `health` reads, the
+  "You own this" ownership banner, the claim control on the download page,
+  and therefore the whole `claim()` walk from "Download or claim" through
+  "No thanks, just take me to the downloads" to a `claimed` row. All of it
+  fails safe - unknown ownership answers `None`, an unrecognised page stops
+  with a screenshot, a missing claim control is `not_eligible` with a
+  sentence rather than a failure - and the selector tables at the top of
+  `adapters/itchio.py` are the one place to fix what the first real account
+  disproves. ItchClaim proves the underlying claim works over plain
+  authenticated HTTP; Trove's driven-browser version of it is unproven, and
+  the first signed-in run is the measurement.
 - **A second claim of any kind.** One claim is one sample: it proves the path
   exists, not that it is reliable. The next weekly giveaway is the test.
 - **The 0.1.23 unattended hardening, against a live week.** The pieces are

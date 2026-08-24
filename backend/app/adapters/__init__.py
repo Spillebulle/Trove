@@ -16,12 +16,14 @@ from __future__ import annotations
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
 from .gog import GogAdapter
+from .itchio import ItchAdapter
 from .prime import PrimeAdapter
 from .steam import SteamAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
     "gog": GogAdapter,
+    "itchio": ItchAdapter,
     "prime": PrimeAdapter,
     "steam": SteamAdapter,
 }
