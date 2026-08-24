@@ -1,4 +1,4 @@
-import type { AccountStatus, ClaimOutcome, RunStatus } from './types'
+import type { AccountStatus, ClaimOutcome, Offer, RunStatus } from './types'
 
 /** Join class names, dropping the falsy ones. */
 export function cn(...parts: Array<string | false | null | undefined>): string {
@@ -136,6 +136,34 @@ export function timeLeft(value: string | null | undefined): string | null {
   if (hours < 24) return `Ends in ${hours} hour${hours === 1 ? '' : 's'}`
   const days = Math.round(hours / 24)
   return `Ends in ${days} day${days === 1 ? '' : 's'}`
+}
+
+/**
+ * Whether an offer has not started yet: `starts_at` parses and is in the
+ * future.
+ *
+ * Everything else - no start date, a past one, an unreadable one - counts as
+ * free now, so an offer can never fall between the two sections of the offers
+ * page: the moment its start passes it simply becomes free-now on the next
+ * render rather than vanishing.
+ */
+export function isUpcoming(offer: Pick<Offer, 'starts_at'>, now: number = Date.now()): boolean {
+  if (!offer.starts_at) return false
+  const starts = new Date(offer.starts_at).getTime()
+  return !Number.isNaN(starts) && starts > now
+}
+
+/** "Thu 28 Aug", with the year added only when it is not this year's date. */
+export function shortDate(value: string | null | undefined): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }),
+  })
 }
 
 /** A duration in seconds, as a figure with a unit. */
