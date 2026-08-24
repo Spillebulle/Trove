@@ -5,18 +5,22 @@ and one line in the table, and nothing else in the app learns its name.
 
 Epic came first and alone, on purpose: CLAUDE.md required one store, one
 account, one full loop, proven, before a second adapter existed. That loop
-closed on 20 Aug 2026 (a real game claimed end to end), so Steam - the
-second store - now has an adapter. It claims only the rare "free to keep"
-promotions; see its module docstring for what that means and what it skips.
+closed on 20 Aug 2026 (a real game claimed end to end), and the second wave
+followed: Steam (only the rare "free to keep" promotions), Prime Gaming (the
+one store whose discovery needs a session, which is why the contract carries
+`discovery_needs_session`), and GOG. Each module's docstring says what its
+store does and does not get; nothing here repeats it.
 """
 from __future__ import annotations
 
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
+from .prime import PrimeAdapter
 from .steam import SteamAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
+    "prime": PrimeAdapter,
     "steam": SteamAdapter,
 }
 

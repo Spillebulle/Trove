@@ -9,6 +9,10 @@ polite:
   1. **Discover without a session.** Ask the adapter what is free. This is a
      public endpoint; no browser is opened and no account is touched. If
      nothing is free, the run ends here having cost a single HTTP request.
+     (One store cannot honour this: Prime Gaming's offers only render for a
+     signed-in session, so an adapter that declares `discovery_needs_session`
+     discovers inside the browser session the claims then use - after the
+     health check, through the same persistence and skip rules.)
   2. **Skip what is already recorded.** An offer this account has a `claimed`
      row for is not attempted again. The ledger is the memory, so a restart,
      a manual run and a scheduled run cannot combine to claim the same thing
@@ -267,8 +271,25 @@ async def discover(
     """
     adapter = get_adapter(store)
     offers = await adapter.list_free_offers()
-    now = utcnow()
+    _persist_offers(db, store, offers, exclude_account_id)
+    return offers
 
+
+def _persist_offers(
+    db: Session,
+    store: str,
+    offers: list[FreeOffer],
+    exclude_account_id: int | None = None,
+) -> None:
+    """Upsert what an adapter found into the `offers` table.
+
+    The one write path for discovered offers, shared by sessionless discovery
+    and by `discover_in_session` - the adapter itself never sees the database,
+    whichever way it found them. The `free_seen_at` stamp and the pull-forward
+    ride here too, so a drop first seen in-session moves the store's other
+    healthy accounts exactly the way a sessionless discovery does.
+    """
+    now = utcnow()
     newly_free: list[Offer] = []
     for offer in offers:
         row = _upsert_offer(db, store, offer, now)
@@ -281,7 +302,6 @@ async def discover(
     if newly_free:
         _pull_runs_forward(db, store, newly_free, exclude_account_id)
         db.commit()
-    return offers
 
 
 async def discover_upcoming(db: Session, store: str) -> list[FreeOffer]:
@@ -301,7 +321,6 @@ async def discover_upcoming(db: Session, store: str) -> list[FreeOffer]:
     for offer in offers:
         _upsert_offer(db, store, offer, now)
     db.commit()
-    return offers
 
 
 def _pull_runs_forward(
@@ -823,22 +842,15 @@ async def _do_run(
     run.offers_seen = len(offers)
     db.commit()
 
-    pending: list[tuple[FreeOffer, Offer]] = []
-    for offer in offers:
-        row = _offer_row(db, store, offer.external_id)
-        if row is None:
-            continue
-        if _already_claimed(db, account.id, row.id):
-            run.already_owned += 1
-            continue
-        # The account id rides along so the adapter can name its screenshots
-        # without being handed the database.
-        offer.extra["account_id"] = account.id
-        pending.append((offer, row))
-
+    pending = _pending_offers(db, account, run, offers)
     db.commit()
 
-    if not pending:
+    # For most stores this is the gate: nothing free means no browser is
+    # opened at all. A store whose offers only render for a signed-in session
+    # (`discovery_needs_session`) cannot be gated here - its sessionless
+    # discovery is an honest empty list - so its run always opens the session
+    # and discovers inside it.
+    if not pending and not adapter.discovery_needs_session:
         logger.info(
             "Nothing to claim for %s on %s: %d free, all accounted for.",
             account.label,
@@ -861,6 +873,32 @@ async def _do_run(
             # the run and can be solved by jumping into it on the screen,
             # rather than failing and needing the whole run again.
             waiter = _CaptchaWaiter(account.id, account.label, adapter.display_name)
+
+            # The session must be known good before in-session discovery: a
+            # signed-out page renders no offers, and an empty page must read
+            # as "signed out", never as "nothing is free this week".
+            await _check_health(db, account, adapter, page)
+
+            if adapter.discovery_needs_session:
+                offers = await adapter.discover_in_session(page)
+                # The same persistence and skip rules as sessionless
+                # discovery; only where the list came from differs. This
+                # account is already at the store, so it is excluded from
+                # the drop's pull-forward.
+                _persist_offers(db, store, offers, exclude_account_id=account.id)
+                run.offers_seen = len(offers)
+                db.commit()
+                pending = _pending_offers(db, account, run, offers)
+                db.commit()
+                if not pending:
+                    logger.info(
+                        "Nothing to claim for %s on %s: %d free, all accounted for.",
+                        account.label,
+                        store,
+                        len(offers),
+                    )
+                    return
+
             await _run_claims(db, account, run, adapter, page, pending, waiter)
         finally:
             # In watch mode the browser stays on the screen until the person
@@ -871,20 +909,47 @@ async def _do_run(
                 await _hold_open_for_watch(account.id)
 
 
-async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
-    """Health-check the session, then attempt each pending offer."""
-    store = account.store
+def _pending_offers(
+    db: Session, account: Account, run: Run, offers: list[FreeOffer]
+) -> list[tuple[FreeOffer, Offer]]:
+    """The offers this account still has to attempt, skips counted on the run.
 
+    Does not commit; the caller owns the transaction. Shared by both discovery
+    paths so the ledger's double-claim protection applies whichever way an
+    offer was found.
+    """
+    pending: list[tuple[FreeOffer, Offer]] = []
+    for offer in offers:
+        row = _offer_row(db, account.store, offer.external_id)
+        if row is None:
+            continue
+        if _already_claimed(db, account.id, row.id):
+            run.already_owned += 1
+            continue
+        # The account id rides along so the adapter can name its screenshots
+        # without being handed the database.
+        offer.extra["account_id"] = account.id
+        pending.append((offer, row))
+    return pending
+
+
+async def _check_health(db, account, adapter, page) -> None:
+    """Raise `NeedsAttention` unless the session is signed in; clear stale flags."""
     healthy, sentence = await adapter.health(page)
     if not healthy:
         shot = await screenshot(
-            page, screenshot_name(account.id, store, "health")
+            page, screenshot_name(account.id, account.store, "health")
         )
         raise NeedsAttention(sentence, shot)
 
     # The session is good, so an old attention flag is stale.
     if account.status != "ok":
         _set_status(db, account, "ok", None, None)
+
+
+async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
+    """Attempt each pending offer. The session is already health-checked."""
+    store = account.store
 
     for index, (offer, row) in enumerate(pending):
         if index:

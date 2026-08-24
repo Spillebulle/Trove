@@ -159,9 +159,30 @@ class BaseAdapter(ABC):
     # assisted sign-in has to start there. Falls back to `login_url`.
     signin_url: str = ""
 
+    # Whether this store's offers can only be read by a signed-in session.
+    # `False` for every store with a public feed, and that is the shape to
+    # prefer: sessionless discovery is what lets a run end after one HTTP
+    # request when nothing is free. Prime Gaming has no public feed (measured:
+    # the signed-out page is an empty SPA shell and the data endpoint answers
+    # 403), so it sets this and does its discovery in `discover_in_session`.
+    # The runner then opens the account's browser session for discovery and
+    # claims together - one session, one lock - and `list_free_offers()`
+    # returns `[]` as an honest no-op.
+    discovery_needs_session: bool = False
+
     @property
     def sign_in_page(self) -> str:
         return self.signin_url or self.login_url
+
+    async def discover_in_session(self, page: Page) -> list["FreeOffer"]:
+        """What is free, read from inside the account's signed-in session.
+
+        Only called when `discovery_needs_session` is true, from within the
+        same `manager.session` the claims then use. The default is the empty
+        answer: most stores never need this, and the sessionless
+        `list_free_offers()` stays the boundary to defend.
+        """
+        return []
 
     async def inspect_base_game(
         self, page: Page, offer: "FreeOffer"

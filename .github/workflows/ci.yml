@@ -79,3 +79,8 @@ jobs:
         env:
           DATA_DIR: ./ci-data
         run: python tools/dlc_sim.py
+
+      # prime_sim makes its own throwaway DATA_DIR; it must never share one
+      # with anything real, because it writes accounts and claims into it.
+      - name: Session-discovery runner path and the Prime claim loop (no browser)
+        run: python tools/prime_sim.py
