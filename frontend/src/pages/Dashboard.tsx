@@ -20,6 +20,7 @@ import {
   OUTCOME_LABEL,
   OUTCOME_TONE,
   fullTime,
+  isUpcoming,
   relativeTime,
   timeLeft,
 } from '@/lib/utils'
@@ -37,6 +38,10 @@ export function Dashboard() {
   const needsHand = (accounts.data ?? []).filter(
     (account) => account.status === 'needs_attention' || account.status === 'never_signed_in',
   )
+
+  // An announced-for-later offer is not free right now; the offers page has a
+  // "Coming up" section for those, and this panel must not count them.
+  const freeNow = (offers.data ?? []).filter((offer) => !isUpcoming(offer))
 
   return (
     <>
@@ -122,7 +127,7 @@ export function Dashboard() {
 
         <Panel
           title="Free right now"
-          count={offers.data?.length}
+          count={offers.data ? freeNow.length : undefined}
           commands={
             <Link to="/offers" className="btn-ghost" title="See every offer.">
               See all
@@ -132,7 +137,7 @@ export function Dashboard() {
         >
           {offers.isError ? (
             <ErrorState error={offers.error} onRetry={() => void offers.refetch()} />
-          ) : (offers.data?.length ?? 0) === 0 ? (
+          ) : freeNow.length === 0 ? (
             <EmptyState
               icon={<Gift size={24} />}
               title="Nothing is free at the moment"
@@ -140,7 +145,7 @@ export function Dashboard() {
             />
           ) : (
             <ul className="divide-y divide-line-soft">
-              {(offers.data ?? []).slice(0, 6).map((offer) => (
+              {freeNow.slice(0, 6).map((offer) => (
                 <li key={offer.id} className="flex items-center gap-3 px-strip py-2">
                   {/* Artwork is content and takes a rung of the ladder (7.21).
                       The block is drawn whether or not a picture arrives, so a

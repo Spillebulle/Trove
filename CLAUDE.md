@@ -110,6 +110,14 @@ a status; it means selected, in hand, primary (§2.4).
 Read the checklist in §16 of the style guide before the first screen ships, and
 §17 before the README.
 
+Store marks in the interface are one component, `ui.StoreBadge`: simple-icons
+path data (CC0), inlined - this app is self-hosted and fetches nothing from a
+CDN - and monochrome through `currentColor`, never the brand colours, which
+would collide with the semantic ones on pages that are mostly state. Prime
+Gaming has no glyph in that set, so Amazon's mark stands in under the Prime
+Gaming name. A store key with no mark falls back to the plain text badge, so
+a new adapter renders without a frontend change.
+
 **The README banner is the family's, not this app's** (§17.4): `docs/images/
 banner.png` and `banner-paper.png`, 1354 x 461 on the theme's backdrop, mark
 and wordmark small in the middle with a wide margin, `<picture>` at width 560 -
@@ -653,6 +661,20 @@ GamerPower is the obvious candidate and **its terms have not been checked**. If
 it is added: a broken feed must degrade to "check the stores on schedule", not
 to a stopped app.
 
+**The offers calendar** (`GET /api/offers/calendar.ics`) is a hand-written
+iCalendar file - two event shapes and a page of RFC 5545 are not worth a
+dependency. An announced giveaway becomes an event over its window (a week
+from the start when the store gave no end, which is Epic's cadence); a
+currently-free offer with a deadline becomes an event at the deadline. It sits
+behind the same session auth as every other endpoint and the offers page
+fetches it with the cookie and hands it to the browser as a file, so it is a
+snapshot to *import*, deliberately not a subscription URL: a calendar app
+polling from outside sends no cookie, and an unauthenticated feed of the
+account's offers is not worth the convenience. If a subscription is ever
+wanted it needs its own token design (a long random per-install token in the
+URL, revocable), which is future work and should not be improvised into this
+endpoint.
+
 ### Per-store notes
 
 - **Epic Games Store** — built. Discovery is the public `freeGamesPromotions`
@@ -930,6 +952,18 @@ session trusting something nobody has run.
   no window manager at all, measured by the probe in the container without
   any focus emulation. So the container case `live.enable_focus` was kept for
   is also not a case where it changes anything observed.
+- The calendar export, against an in-memory database (the `tools/*_sim.py`
+  pattern): both event shapes come out - an upcoming offer as its window with
+  the seven-day fallback end, a currently-free offer as its deadline, an
+  ended offer not at all - with RFC 5545 escaping, CRLF line ends, and the
+  75-octet fold measured on a deliberately long summary. **Not yet imported
+  into a real calendar app**; Google Calendar and Apple Calendar are the
+  ones to try, and the strict parser of the two is Apple's.
+- That a claim row copies `image_url` off the offer when it is written
+  (`runner._record`, same line as `title` and `kind`), read from the code
+  path rather than assumed. Rows written before the column existed stay
+  blank, and the ledger draws the art block either way so those rows keep
+  their height.
 
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven

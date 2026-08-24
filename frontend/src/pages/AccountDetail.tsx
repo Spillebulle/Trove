@@ -36,6 +36,7 @@ import {
   Panel,
   Spinner,
   StatusBadge,
+  StoreBadge,
   Toggle,
 } from '@/components/ui'
 
@@ -373,6 +374,10 @@ export function AccountDetail() {
         title={data.label}
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
+            {/* Which store this login belongs to, before the words. */}
+            <span className="text-dim">
+              <StoreBadge store={data.store} withName />
+            </span>
             <StatusBadge
               tone={ACCOUNT_STATUS_TONE[data.status]}
               label={ACCOUNT_STATUS_LABEL[data.status]}
@@ -783,6 +788,20 @@ export function AccountDetail() {
           <ul className="divide-y divide-line-soft">
             {(claims.data ?? []).map((claim) => (
               <li key={claim.id} className="flex items-center gap-3 px-strip py-2">
+                {/* The poster, same treatment as the dashboard's offer rows:
+                    the block is drawn whether or not a picture arrives, so a
+                    row claimed before Trove copied posters keeps the height
+                    of its neighbours rather than jogging the list. */}
+                <span className="art aspect-wide w-art-row shrink-0">
+                  {claim.image_url && (
+                    <img
+                      src={claim.image_url}
+                      alt=""
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-control text-fg">{claim.title}</span>
                   {claim.detail && (

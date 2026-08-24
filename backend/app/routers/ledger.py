@@ -6,10 +6,10 @@ and the UI reads them together.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -20,9 +20,9 @@ from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db
 from ..models import Account, Claim, Offer, Run
-from ..runner import discover
+from ..runner import discover, discover_upcoming
 from ..schemas import ClaimKey, ClaimRead, OfferRead, RunRead, Summary
-from ..timeutil import utcnow
+from ..timeutil import as_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,12 @@ def summary(db: Session = Depends(get_db)) -> Summary:
     accounts = db.query(Account).all()
     free_now = (
         db.query(Offer.id)
-        .filter((Offer.ends_at.is_(None)) | (Offer.ends_at > now))
+        .filter(
+            (Offer.ends_at.is_(None)) | (Offer.ends_at > now),
+            # An announced offer is in the table too now, and "free now" must
+            # not count next week: a start in the future means not yet free.
+            (Offer.starts_at.is_(None)) | (Offer.starts_at <= now),
+        )
         .count()
     )
     claimed_total = db.query(Claim.id).filter(Claim.outcome == "claimed").count()
@@ -111,18 +116,145 @@ def list_offers(
 
 @router.post("/offers/refresh", response_model=list[OfferRead])
 async def refresh_offers(db: Session = Depends(get_db)) -> list[OfferRead]:
-    """Ask every store what is free right now.
+    """Ask every store what is free right now, and what is announced.
 
     Safe to press: this is the half of the app that touches no account and
-    opens no browser, so it costs one HTTP request per store and cannot get
-    anybody flagged. That is exactly why discovery is separate from claiming.
+    opens no browser, so it costs a couple of HTTP requests per store and
+    cannot get anybody flagged. That is exactly why discovery is separate from
+    claiming. The upcoming list rides along so the calendar refreshes with the
+    same button; it is recorded only, never claimed.
     """
     for store in ADAPTER_MAP:
         try:
             await discover(db, store)
+            await discover_upcoming(db, store)
         except Exception as exc:
             logger.warning("Could not read the offers for %s: %s", store, exc)
     return list_offers(current=True, db=db)
+
+
+# ── Calendar ────────────────────────────────────────────────────────────────
+#
+# The offers as an iCalendar file. Hand-written rather than a dependency: it is
+# two event shapes and a page of RFC 5545, and a library for that is a library
+# to keep current forever.
+
+
+def _ics_text(value: str) -> str:
+    """Escape a text value the way RFC 5545 3.3.11 asks."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+    )
+
+
+def _ics_time(value: datetime) -> str:
+    """A UTC timestamp in the calendar's own shape, `20260828T150000Z`."""
+    return (as_utc(value) or value).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _ics_fold(line: str) -> list[str]:
+    """Fold a long content line at 74 octets with a space continuation.
+
+    The RFC caps a line at 75 octets. Folding is done on the UTF-8 bytes -
+    a multi-byte character split in half is not a character any more - by
+    backing the cut off until it lands on a codepoint boundary.
+    """
+    data = line.encode("utf-8")
+    out: list[str] = []
+    prefix = b""
+    while len(prefix) + len(data) > 74:
+        cut = 74 - len(prefix)
+        while cut > 1 and (data[cut] & 0xC0) == 0x80:
+            cut -= 1
+        out.append((prefix + data[:cut]).decode("utf-8"))
+        data = data[cut:]
+        prefix = b" "
+    out.append((prefix + data).decode("utf-8"))
+    return out
+
+
+def _store_name(store: str) -> str:
+    adapter = ADAPTER_MAP.get(store)
+    return adapter.display_name if adapter and adapter.display_name else store
+
+
+def _vevent(uid: str, start: datetime, end: datetime, summary: str, url: str | None) -> list[str]:
+    lines = [
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{_ics_time(utcnow())}",
+        f"DTSTART:{_ics_time(start)}",
+        f"DTEND:{_ics_time(end)}",
+        f"SUMMARY:{_ics_text(summary)}",
+    ]
+    if url:
+        lines.append(f"URL:{_ics_text(url)}")
+    lines.append("END:VEVENT")
+    return lines
+
+
+@router.get("/offers/calendar.ics")
+def offer_calendar(db: Session = Depends(get_db)) -> Response:
+    """The announced giveaways, and the deadlines, as a calendar file.
+
+    An upcoming offer becomes an event over its window (a week from the start
+    when the store gave no end, which is Epic's cadence); a currently-free
+    offer with an end date becomes an event at the deadline, because the
+    deadline is the part a calendar is actually for.
+
+    A download behind the session cookie like every other endpoint, on
+    purpose: a calendar app *subscribing* to a URL sends no cookie, so a feed
+    would have to be unauthenticated or carry its own token, and neither is
+    designed. Until a tokened feed exists, this is a file the person saves
+    and imports.
+    """
+    now = utcnow()
+    offers = (
+        db.query(Offer)
+        .filter((Offer.ends_at.is_(None)) | (Offer.ends_at > now))
+        .order_by(Offer.starts_at.asc().nullsfirst(), Offer.title.asc())
+        .all()
+    )
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Trove//Offers//EN",
+        "CALSCALE:GREGORIAN",
+    ]
+    for offer in offers:
+        starts = as_utc(offer.starts_at)
+        ends = as_utc(offer.ends_at)
+        summary = f"{offer.title} free on {_store_name(offer.store)}"
+        if starts is not None and starts > now:
+            lines += _vevent(
+                uid=f"offer-{offer.id}@trove",
+                start=starts,
+                end=ends or (starts + timedelta(days=7)),
+                summary=summary,
+                url=offer.url,
+            )
+        elif ends is not None:
+            # Free now, so what is left to put on a calendar is the deadline.
+            lines += _vevent(
+                uid=f"offer-{offer.id}-ends@trove",
+                start=ends,
+                end=ends,
+                summary=f"{summary} ends",
+                url=offer.url,
+            )
+
+    lines.append("END:VCALENDAR")
+    folded = [part for line in lines for part in _ics_fold(line)]
+    return Response(
+        content="\r\n".join(folded) + "\r\n",
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="trove-offers.ics"'},
+    )
 
 
 # ── Claims ──────────────────────────────────────────────────────────────────
