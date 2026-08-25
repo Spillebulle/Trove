@@ -25,6 +25,7 @@ import { useToast } from '@/lib/app-context'
 import type { Offer } from '@/lib/types'
 import { fullTime, isUpcoming, relativeTime, shortDate, timeLeft } from '@/lib/utils'
 import {
+  Art,
   EmptyState,
   ErrorState,
   KindBadge,
@@ -170,16 +171,11 @@ export function Offers() {
                      * line and a countdown, which is text that belongs under the
                      * picture rather than over it.
                      */}
-                    <div className="art aspect-wide w-full rounded-b-none">
-                      {offer.image_url && (
-                        <img
-                          src={offer.image_url}
-                          alt=""
-                          loading="lazy"
-                          className="h-full w-full object-cover"
-                        />
-                      )}
-                    </div>
+                    <Art
+                      src={offer.image_url}
+                      store={offer.store}
+                      className="block aspect-wide w-full rounded-b-none"
+                    />
 
                     <div className="p-strip">
                       <h2
@@ -254,16 +250,11 @@ export function Offers() {
                     {/* Artwork is content and takes a rung of the ladder (7.21).
                         The block is drawn whether or not a picture arrives, so a
                         row with no art is the same height as its neighbours. */}
-                    <span className="art aspect-wide w-art-row shrink-0">
-                      {offer.image_url && (
-                        <img
-                          src={offer.image_url}
-                          alt=""
-                          loading="lazy"
-                          className="h-full w-full object-cover"
-                        />
-                      )}
-                    </span>
+                    <Art
+                      src={offer.image_url}
+                      store={offer.store}
+                      className="aspect-wide w-art-row shrink-0"
+                    />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="truncate text-control text-strong">{offer.title}</span>

@@ -27,6 +27,7 @@ import {
 import { LiveBrowser } from '@/components/LiveBrowser'
 import { ScreenView } from '@/components/ScreenView'
 import {
+  Art,
   ConfirmDialog,
   Dialog,
   EmptyState,
@@ -798,16 +799,11 @@ export function AccountDetail() {
                     the block is drawn whether or not a picture arrives, so a
                     row claimed before Trove copied posters keeps the height
                     of its neighbours rather than jogging the list. */}
-                <span className="art aspect-wide w-art-row shrink-0">
-                  {claim.image_url && (
-                    <img
-                      src={claim.image_url}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full object-cover"
-                    />
-                  )}
-                </span>
+                <Art
+                  src={claim.image_url}
+                  store={claim.store}
+                  className="aspect-wide w-art-row shrink-0"
+                />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-control text-fg">{claim.title}</span>
                   {claim.detail && (

@@ -25,6 +25,7 @@ import {
   timeLeft,
 } from '@/lib/utils'
 import {
+  Art,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -168,20 +169,24 @@ export function Dashboard() {
                   {/* Artwork is content and takes a rung of the ladder (7.21).
                       The block is drawn whether or not a picture arrives, so a
                       row with no art is the same height as its neighbours. */}
-                  <span className="art aspect-wide w-art-row shrink-0">
-                    {offer.image_url && (
-                      <img
-                        src={offer.image_url}
-                        alt=""
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                      />
-                    )}
-                  </span>
+                  <Art
+                    src={offer.image_url}
+                    store={offer.store}
+                    className="aspect-wide w-art-row shrink-0"
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-control text-strong">{offer.title}</span>
-                    <span className="block truncate text-small text-dim">
-                      {timeLeft(offer.ends_at) ?? 'No end date given.'}
+                    {/* Which store it is free on. The artwork tells games
+                        apart but says nothing about where to claim them, and
+                        with five stores that is the question. The mark alone,
+                        as in "Coming up": its tooltip and its screen-reader
+                        text carry the name, and the width belongs to the
+                        countdown. */}
+                    <span className="mt-0.5 flex items-center gap-1.5 text-small text-dim">
+                      <StoreBadge store={offer.store} />
+                      <span className="truncate">
+                        {timeLeft(offer.ends_at) ?? 'No end date given.'}
+                      </span>
                     </span>
                   </span>
                   {offer.claimed_by.length > 0 && (

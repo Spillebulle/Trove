@@ -4,7 +4,7 @@
  * STYLE-GUIDE section 7.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, TriangleAlert, X } from 'lucide-react'
+import { Check, Gift, TriangleAlert, X } from 'lucide-react'
 import { cn, type Tone, BADGE_CLASS, DOT_CLASS } from '@/lib/utils'
 
 /* ── Page header ─────────────────────────────────────────────────────────── */
@@ -180,6 +180,64 @@ export function StoreBadge({ store, withName }: { store: string; withName?: bool
         <path d={mark.path} />
       </svg>
       {withName ? <span className="truncate">{mark.name}</span> : <span className="sr-only">{mark.name}</span>}
+    </span>
+  )
+}
+
+
+/**
+ * A game's artwork, and what to draw when there is none.
+ *
+ * The block is always drawn, whatever arrives. A row whose picture is missing
+ * keeps the height and the left edge of its neighbours instead of jogging the
+ * list - the ledger used to omit the whole block and the text slid left, while
+ * the account page drew an empty one, so the same claim looked different on two
+ * pages and neither looked deliberate.
+ *
+ * With no picture it shows the store's own mark, dimmed. `.art` is a filled
+ * panel (`bg-control`), so an empty one reads as a picture that failed to load;
+ * a mark in it reads as a row that never had one - which is the truth for a
+ * claim written before Trove copied posters, and for one whose offer has since
+ * been pruned. The mark carries the store's name in its tooltip and to a screen
+ * reader, so the block says something either way.
+ *
+ * `className` carries the caller's own sizing, because the shape differs per
+ * page: a wide thumbnail in a row, a full-width cover on a card.
+ */
+export function Art({
+  src,
+  store,
+  className,
+}: {
+  src?: string | null
+  store?: string
+  className?: string
+}) {
+  // A stored poster URL can stop resolving - a store prunes its CDN, a
+  // promotion ends - and the browser's answer to that is its own broken-image
+  // glyph, which looks like a fault in Trove. Seen while checking this
+  // component against a seeded row. `onError` turns it back into the same
+  // "no picture" the component already draws well. Keyed by `src` so a row
+  // re-rendered with a different picture gets a fresh try rather than
+  // inheriting the last one's failure.
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [src])
+
+  return (
+    <span className={cn('art', className)}>
+      {src && !failed ? (
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center text-dim opacity-70">
+          {store ? <StoreBadge store={store} /> : <Gift className="size-icon" />}
+        </span>
+      )}
     </span>
   )
 }

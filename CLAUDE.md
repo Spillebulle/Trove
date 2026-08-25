@@ -1759,6 +1759,16 @@ window. See the two paragraphs on it above.
   UI should say so quietly rather than in `critical`.
 - Colouring a status with the accent, or filling a selected row with it. §2.4 is
   a closed list and this app has more status than most.
+- Leaving out the artwork block when there is no artwork. `components/ui.Art`
+  always draws it and puts the **store's mark** in it when there is no picture,
+  because `.art` is a filled panel and an empty one reads as a picture that
+  failed to load. The ledger used to omit the block entirely, so rows without a
+  poster slid left while the account page drew an empty one - the same claim,
+  two shapes, neither deliberate. It also falls back to the mark when a stored
+  poster URL stops resolving (`onError`), which a pruned store CDN will do: the
+  browser's own broken-image glyph looks like a fault in Trove. Seen on a
+  seeded row while checking the component, which is why it is written down
+  here rather than guessed at later.
 - Stating the version anywhere but `backend/app/__init__.py`. The sidebar used
   to carry `const VERSION = '0.1.0'` of its own, so upgrading the backend to
   0.1.4 left the interface reporting 0.1.0 and a correct upgrade looked like a
