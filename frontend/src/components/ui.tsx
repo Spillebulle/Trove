@@ -177,9 +177,26 @@ const STORE_MARKS: Record<string, { name: string; path: string }> = {
  */
 export function StoreBadge({ store, withName }: { store: string; withName?: boolean }) {
   const mark = STORE_MARKS[store]
-  if (!mark) return <span className={BADGE_CLASS.neutral}>{store}</span>
+  if (!mark) {
+    return <span className={cn(BADGE_CLASS.neutral, 'shrink-0')}>{store}</span>
+  }
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5" title={mark.name}>
+    <span
+      // **`min-w-0` only when there is a name to truncate.** With the mark
+      // alone this is a fixed 16px and must never shrink: as a flex sibling of
+      // a long line - an account's failure reason, an offer's countdown - a
+      // `min-w-0` wrapper collapses towards zero width, while the svg inside
+      // keeps its `shrink-0` and spills out of it, painting the mark straight
+      // over the text beside it. Seen on "Needs a hand" with a long reason.
+      // With `withName` the wrapper *must* stay shrinkable, because that is
+      // what lets the store's name truncate instead of pushing a badge off the
+      // row - so the two cases want opposite things and cannot share a class.
+      className={cn(
+        'inline-flex items-center gap-1.5',
+        withName ? 'min-w-0' : 'shrink-0',
+      )}
+      title={mark.name}
+    >
       <svg
         viewBox="0 0 24 24"
         className="size-icon shrink-0"

@@ -1759,6 +1759,16 @@ window. See the two paragraphs on it above.
   UI should say so quietly rather than in `critical`.
 - Colouring a status with the accent, or filling a selected row with it. §2.4 is
   a closed list and this app has more status than most.
+- Putting `min-w-0` on a flex child that holds a fixed-size thing. `StoreBadge`
+  had it on its wrapper for both shapes, and with the **mark alone** beside a
+  long line the wrapper collapsed towards zero while the `svg` kept its
+  `shrink-0` and spilled out, painting the store mark over the sentence next to
+  it. Reported on "Needs a hand" with a long failure reason; proved by putting
+  the old class back on the live page and measuring - **wrapper 11px, mark
+  overlapping the text by 1px**, and only on the row whose text was long enough
+  to squeeze it. With the fix, 18px and a 6px gap on every row. The two shapes
+  want opposite things: with a name it *must* stay shrinkable so the name can
+  truncate, so the class is chosen per shape rather than shared.
 - Leaving out the artwork block when there is no artwork. `components/ui.Art`
   always draws it and puts the **store's mark** in it when there is no picture,
   because `.art` is a filled panel and an empty one reads as a picture that
