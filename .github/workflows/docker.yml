@@ -254,9 +254,35 @@ jobs:
             message=""
           fi
 
-          # First line is the title, the rest is the body.
-          subject="$(printf '%s\n' "$message" | head -n 1)"
-          body="$(printf '%s\n' "$message" | tail -n +2)"
+          # The title is the bare version number, built from the tag and never
+          # read out of the annotation.
+          #
+          # House standard, STYLE-GUIDE 17.2: the releases page is a list read
+          # down a narrow left-hand column, so every row has to be the same kind
+          # of thing. Thirty releases of "Trove v0.1.18", "v0.1.21" and "0.1.31:
+          # say why an offer is unclaimed" is what a convention that relies on
+          # remembering looks like from the outside - and a 200px column truncates
+          # exactly the half after the colon, so the summary was not readable
+          # there either. Generating it is the only version of this rule that
+          # survives.
+          title="${tag#v}"
+
+          # The annotation is the notes, and the notes are bullets. A first line
+          # that only restates the version or the app name is a title somebody
+          # typed by hand; drop it rather than print it twice.
+          body="$message"
+          first="$(printf '%s\n' "$message" | head -n 1)"
+          if printf '%s' "$first" | grep -Eqi "^[[:space:]]*(trove[[:space:]]+)?v?${tag#v}[[:space:]]*(:.*)?$"; then
+            body="$(printf '%s\n' "$message" | tail -n +2)"
+          fi
+
+          # Neither of these is fatal: the images are already published, and a
+          # release that exists with thin notes beats a red workflow run.
+          if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+            echo "::warning::$tag carries no release notes. The tag annotation should be 3-8 user-facing bullets (STYLE-GUIDE 17.2); write them with 'git tag -a $tag'."
+          elif ! printf '%s\n' "$body" | grep -qE '^[[:space:]]*[-*] '; then
+            echo "::warning::$tag's release notes are not a bulleted list. The house standard is 3-8 one-line bullets, each a change a user would notice (STYLE-GUIDE 17.2)."
+          fi
 
           {
             printf '%s\n\n---\n\n' "${body:-Released from $tag.}"
@@ -270,5 +296,5 @@ jobs:
           # --notes-file, not --notes: the body contains backticks and $ that a
           # shell-expanded argument would mangle.
           gh release create "$tag" \
-            --title "${subject:-$tag}" \
+            --title "$title" \
             --notes-file /tmp/notes.md

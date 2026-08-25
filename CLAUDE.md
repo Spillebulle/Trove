@@ -1351,6 +1351,17 @@ docker compose logs -f trove
 docker compose up -d --build
 ```
 
+```powershell
+# --- The README screenshots --------------------------------------------------
+# Generated, not taken. Builds the frontend, seeds a throwaway database, asks
+# the four sessionless stores what is actually free right now, serves it with
+# the real API and photographs the pages into docs/images/. Never touches
+# DATA_DIR and never opens a store account: the seeded schedule is on, but
+# every seeded account's next run is hours away.
+backend/.venv/Scripts/python tools/shots.py
+backend/.venv/Scripts/python tools/shots.py --no-build --offline   # quickest
+```
+
 **Run uvicorn from the repository root**, not from `backend/`. `.env` and
 `.env.local` are resolved relative to the working directory, so starting it a
 directory down silently ignores them and you get the "changeme" password and no
@@ -1358,6 +1369,46 @@ CORS origin.
 
 `npm run lint` is `tsc --noEmit`. There is no test suite yet; when there is one,
 put how to run a single test here.
+
+## Releasing
+
+A release is one annotated tag pushed to `main`. `.github/workflows/docker.yml`
+builds the image, pushes it to both registries and creates the GitHub Release
+from that tag; nothing else is typed anywhere.
+
+```powershell
+# The version lives in exactly one place, and the workflow fails the release
+# if it disagrees with the tag.
+#   backend/app/__init__.py:  __version__ = "0.1.32"
+
+git tag -a v0.1.32 -m @'
+- Free now no longer bounces past the end of the list.
+- An offer card links to the store from its picture and its store badge.
+- A long claim status no longer pushes the store link onto a second line.
+'@
+git push origin v0.1.32
+```
+
+**The house standard is STYLE-GUIDE 17.2, and it has two halves.**
+
+1. **The title is the bare version number** - `0.1.32`. No `v`, no "Trove", no
+   summary after a colon. **Do not write one**: the workflow builds the title
+   from the tag name and ignores the annotation entirely, so a title line typed
+   into the message is dropped (and warned about) rather than used.
+2. **The annotation is the notes, and the notes are three to eight one-line
+   bullets** of what a person would notice, newest concern first. No preamble
+   sentence, no headings, no file lists - the reasoning belongs in this file.
+   The image tags are appended by the workflow under a rule; never type them.
+
+Why it is generated rather than remembered: the first thirty-one releases were
+titled three different ways ("Trove v0.1.18", "v0.1.21", "0.1.31: say why an
+offer is unclaimed"), because a convention that lives only in a document gets
+followed until the release somebody is in a hurry for. The releases page is a
+narrow left-hand column and truncates everything after the version, so the
+typed half was not even readable there. A build with nothing user-facing in it
+still gets bullets, one of which says so: "Diagnostic only: no behaviour
+change." An empty annotation makes the workflow warn and the release body read
+"Released from v0.1.32.", which is what several of the early ones say.
 
 ## What is verified and what is not
 
