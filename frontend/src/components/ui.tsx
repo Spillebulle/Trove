@@ -174,14 +174,49 @@ const STORE_MARKS: Record<string, { name: string; path: string }> = {
  * A store with no mark here - a new adapter - falls back to the plain text
  * badge with the store's own key, so the backend can grow a store without a
  * frontend change and nothing renders blank.
+ *
+ * With `href` the badge is a link to the store's own page for the thing beside
+ * it. That is how an offer card gets to the store now: a separate "Store page"
+ * link had to share the badge row, and a long claim status pushed it onto a
+ * second line and moved the badge with it. A link the person already has to
+ * look at costs no width at all.
  */
-export function StoreBadge({ store, withName }: { store: string; withName?: boolean }) {
+export function StoreBadge({
+  store,
+  withName,
+  href,
+}: {
+  store: string
+  withName?: boolean
+  href?: string | null
+}) {
   const mark = STORE_MARKS[store]
+
+  // With an `href` the badge *is* the way to the store page, so it renders as
+  // the link itself rather than being wrapped by one: the wrapper would need
+  // its own copy of the shrink/truncate rules below, and those two cases are
+  // exactly what a second copy gets wrong. The tooltip then says what the
+  // click does instead of repeating the name already written beside it.
+  const Tag = href ? 'a' : 'span'
+  const linkProps = href
+    ? {
+        href,
+        target: '_blank',
+        rel: 'noreferrer noopener',
+        title: `Open ${mark?.name ?? store} in your own browser.`,
+        'aria-label': `Open ${mark?.name ?? store} in your own browser.`,
+      }
+    : {}
+
   if (!mark) {
-    return <span className={cn(BADGE_CLASS.neutral, 'shrink-0')}>{store}</span>
+    return (
+      <Tag className={cn(BADGE_CLASS.neutral, 'shrink-0', href && 'hover:brightness-110')} {...linkProps}>
+        {store}
+      </Tag>
+    )
   }
   return (
-    <span
+    <Tag
       // **`min-w-0` only when there is a name to truncate.** With the mark
       // alone this is a fixed 16px and must never shrink: as a flex sibling of
       // a long line - an account's failure reason, an offer's countdown - a
@@ -194,8 +229,10 @@ export function StoreBadge({ store, withName }: { store: string; withName?: bool
       className={cn(
         'inline-flex items-center gap-1.5',
         withName ? 'min-w-0' : 'shrink-0',
+        href && 'hover:text-accent',
       )}
       title={mark.name}
+      {...linkProps}
     >
       <svg
         viewBox="0 0 24 24"
@@ -206,7 +243,7 @@ export function StoreBadge({ store, withName }: { store: string; withName?: bool
         <path d={mark.path} />
       </svg>
       {withName ? <span className="truncate">{mark.name}</span> : <span className="sr-only">{mark.name}</span>}
-    </span>
+    </Tag>
   )
 }
 

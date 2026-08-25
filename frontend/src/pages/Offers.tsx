@@ -186,12 +186,38 @@ export function Offers() {
                      * under it (7.15). Not an art card: an offer needs a claimed-by
                      * line and a countdown, which is text that belongs under the
                      * picture rather than over it.
+                     *
+                     * The picture is also the link to the store page, and so is
+                     * the store badge under it. There used to be a "Store page"
+                     * link sharing the row with the claim status, and a long
+                     * status ("Main game is paid", "Download only") wrapped
+                     * the row and shoved the badge around - the link was
+                     * competing for width with the one thing on the card that
+                     * has something to say. Two things a person already looks
+                     * at carry it instead, and the row is the status alone.
                      */}
-                    <Art
-                      src={offer.image_url}
-                      store={offer.store}
-                      className="block aspect-wide w-full rounded-b-none"
-                    />
+                    {offer.url ? (
+                      <a
+                        href={offer.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="block transition-[filter] hover:brightness-110"
+                        title="Open this on the store, in your own browser."
+                        aria-label="Open this on the store, in your own browser."
+                      >
+                        <Art
+                          src={offer.image_url}
+                          store={offer.store}
+                          className="block aspect-wide w-full rounded-b-none"
+                        />
+                      </a>
+                    ) : (
+                      <Art
+                        src={offer.image_url}
+                        store={offer.store}
+                        className="block aspect-wide w-full rounded-b-none"
+                      />
+                    )}
 
                     <div className="flex flex-1 flex-col p-strip">
                       <h2
@@ -202,7 +228,7 @@ export function Offers() {
                       </h2>
 
                       <p className="mt-0.5 flex min-w-0 items-center gap-2 text-small text-dim">
-                        <StoreBadge store={offer.store} withName />
+                        <StoreBadge store={offer.store} withName href={offer.url} />
                         {/* An add-on is worth a badge rather than a word: it is the
                             one kind that may not be claimable on its own, and the
                             card should say so at a glance. */}
@@ -240,17 +266,6 @@ export function Offers() {
                           </span>
                         ) : (
                           <span className="badge">Not claimed yet</span>
-                        )}
-                        {offer.url && (
-                          <a
-                            href={offer.url}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            className="ml-auto text-small text-accent hover:brightness-110"
-                            title="Open this on the store, in your own browser."
-                          >
-                            Store page
-                          </a>
                         )}
                       </div>
 
@@ -296,7 +311,7 @@ export function Offers() {
                       >
                         {/* The mark alone; the tooltip carries the store's
                             name, and the window is the part worth the width. */}
-                        <StoreBadge store={offer.store} />
+                        <StoreBadge store={offer.store} href={offer.url} />
                         <span className="truncate">{freeWindow(offer)}</span>
                       </span>
                     </span>

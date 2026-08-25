@@ -337,7 +337,12 @@ export function Layout() {
           </div>
         )}
 
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        {/* `overscroll-none` so reaching the bottom of a long page does not
+            chain the scroll up to the document and bounce the whole shell,
+            which showed as a black band under the app. The base stylesheet
+            says the same thing to html and body; both ends are worth having,
+            because either one alone still leaves a bounce on some builds. */}
+        <main className="min-w-0 flex-1 overflow-y-auto overscroll-none">
           <div className="mx-auto max-w-[1200px] px-strip py-5">
             <Outlet />
           </div>

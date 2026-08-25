@@ -21,13 +21,26 @@
     @apply border-line;
   }
 
+  /*
+   * `overscroll-behavior: none` on both, and it is not decoration.
+   *
+   * The shell is `h-screen overflow-hidden` and the page scrolls inside
+   * `<main>`, so the document itself has nothing to scroll - but Chrome still
+   * chains a scroll past the end of an inner area up to the root and draws its
+   * elastic overscroll there, which slides the whole app up and shows a band
+   * of bare `--backdrop` across the bottom. Reported on Free now, which is the
+   * page long enough to reach the end of. `none` stops the chaining *and* the
+   * bounce, so the last row simply stops being the last row.
+   */
   html {
     -webkit-text-size-adjust: 100%;
     background: var(--backdrop);
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-backdrop font-sans text-body text-fg antialiased;
+    overscroll-behavior: none;
   }
 
   /* Keyboard focus is visible everywhere; pointer focus stays quiet. */
