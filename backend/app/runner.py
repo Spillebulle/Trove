@@ -62,6 +62,20 @@ settings = get_settings()
 # the cost of being wrong about that is the account, not the game.
 PAUSE_BETWEEN_CLAIMS_S = 4.0
 
+# Why an add-on was not claimed, as codes the interface can act on. The order
+# here is the order of the branches in `_satisfy_base_game`, and each is a
+# different piece of news for the person reading a card:
+#
+#   BASE_PAID     the game costs money and Trove does not buy anything. Settled,
+#                 and the one they can do something about.
+#   BASE_UNKNOWN  the ownership check could not be read. Not a finding.
+#   BASE_MANUAL   the game is free but Trove could not work out how to claim it.
+#   BASE_FAILED   the game was free and the attempt to claim it did not land.
+REASON_BASE_PAID = "base_game_paid"
+REASON_BASE_UNKNOWN = "base_game_unknown"
+REASON_BASE_MANUAL = "base_game_manual"
+REASON_BASE_FAILED = "base_game_failed"
+
 # When a blocked checkout's giveaway has this long left to run, one reminder
 # goes out: enough notice to actually do something about it, late enough that
 # most weeks the person has long since pressed the button.
@@ -1010,6 +1024,7 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
             key_code=result.key_code,
             key_store=result.key_store,
             shot=result.screenshot,
+            reason_code=result.reason_code,
         )
         if result.outcome in ("claimed", "already_owned") and (
             account.checkout_offer == offer.external_id
@@ -1073,6 +1088,7 @@ async def _satisfy_base_game(
                 "whether your account has it. It is left alone rather than "
                 "claimed into an account that may not be able to use it."
             ),
+            reason_code=REASON_BASE_UNKNOWN,
         )
         db.commit()
         return False
@@ -1108,6 +1124,7 @@ async def _satisfy_base_game(
                     f"Not claimed: {base.title}, which this add-on needs, could "
                     "not be claimed first."
                 ),
+                reason_code=REASON_BASE_FAILED,
             )
             db.commit()
             return False
@@ -1130,7 +1147,12 @@ async def _satisfy_base_game(
             "the game while the offer is still on."
         )
     logger.info("Epic: skipping %r - %s", offer.title, detail)
-    _record(db, account, run, row, outcome="not_eligible", detail=detail)
+    _record(
+        db, account, run, row,
+        outcome="not_eligible",
+        detail=detail,
+        reason_code=REASON_BASE_MANUAL if base.free is True else REASON_BASE_PAID,
+    )
     db.commit()
     return False
 
@@ -1148,6 +1170,7 @@ def _record(
     title: str | None = None,
     kind: str | None = None,
     image_url: str | None = None,
+    reason_code: str | None = None,
 ) -> Claim:
     """Write the ledger row.
 
@@ -1175,6 +1198,7 @@ def _record(
         image_url=image_url or (offer.image_url if offer is not None else None),
         outcome=outcome,
         detail=detail,
+        reason_code=reason_code,
         key_code=encrypt(key_code) if key_code else None,
         key_store=key_store,
         screenshot=shot,

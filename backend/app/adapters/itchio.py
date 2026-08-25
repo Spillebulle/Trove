@@ -176,6 +176,13 @@ CLAIM_CONTROL = [
     'a:has-text("claim it")',
 ]
 
+# Why an itch.io sale gave nothing to keep. Both are ordinary outcomes rather
+# than faults - plenty of itch.io sales are a free download and no more - and
+# both are settled, so a card should say which instead of "Not claimed yet",
+# which reads as a thing still to come.
+REASON_DOWNLOAD_ONLY = "download_only"
+REASON_BROWSER_ONLY = "browser_only"
+
 # A game that is browser-play only: nothing to download and nothing to keep,
 # so nothing to claim. Answering "not eligible" for one is an answer, not a
 # failure.
@@ -504,6 +511,7 @@ class ItchAdapter(BaseAdapter):
                         "This one is browser-play only - there is nothing to "
                         "download or keep, so there is nothing to claim."
                     ),
+                    reason_code=REASON_BROWSER_ONLY,
                 )
             raise NeedsAttention(
                 "Could not find the \"Download or claim\" button on the game "
@@ -648,6 +656,7 @@ class ItchAdapter(BaseAdapter):
                     "looks download-only for the sale - nothing was added to "
                     "the library."
                 ),
+                reason_code=REASON_DOWNLOAD_ONLY,
             )
         raise NeedsAttention(
             "The claim was clicked but Trove could not confirm the game landed "

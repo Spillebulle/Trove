@@ -1759,6 +1759,17 @@ window. See the two paragraphs on it above.
   UI should say so quietly rather than in `critical`.
 - Colouring a status with the accent, or filling a selected row with it. §2.4 is
   a closed list and this app has more status than most.
+- Reading a reason back out of the sentence written for a person. `not_eligible`
+  is one outcome with several causes that read identically on a card - "Not
+  claimed yet" - and they are not the same news: an add-on whose game costs
+  money will never be claimed by waiting, while one skipped because a check
+  could not be read might be claimed on the next run. `Claim.reason_code`
+  carries the cause as a word beside `detail`'s sentence, `ClaimResult` lets an
+  adapter name its own, and `BLOCKED_LABEL` in the frontend turns it into the
+  few words a card has room for, with the sentence on the tooltip. An unknown
+  code falls back to "Not claimed yet" on purpose - a build that learns a
+  reason before the interface does should say the vague true thing rather than
+  print a code - and so does a row written before the column existed.
 - Putting `min-w-0` on a flex child that holds a fixed-size thing. `StoreBadge`
   had it on its wrapper for both shapes, and with the **mark alone** beside a
   long line the wrapper collapsed towards zero while the `svg` kept its

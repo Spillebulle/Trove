@@ -84,6 +84,24 @@ def _serialise_offer(db: Session, offer: Offer) -> OfferRead:
         .distinct()
         .all()
     )
+    # Why it is unclaimed, when there is a reason worth showing. Asked only
+    # when nothing has claimed it - an offer one account owns is not blocked -
+    # and taken from the most recent tagged row, because an account fixed since
+    # (bought the base game, say) should not keep being described by its
+    # oldest failure.
+    blocked = None
+    if not labels:
+        blocked = (
+            db.query(Claim)
+            .filter(
+                Claim.offer_id == offer.id,
+                Claim.outcome == "not_eligible",
+                Claim.reason_code.isnot(None),
+            )
+            .order_by(Claim.created_at.desc())
+            .first()
+        )
+
     return OfferRead(
         id=offer.id,
         store=offer.store,
@@ -98,6 +116,8 @@ def _serialise_offer(db: Session, offer: Offer) -> OfferRead:
         first_seen_at=offer.first_seen_at,
         last_seen_at=offer.last_seen_at,
         claimed_by=[row[0] for row in labels],
+        blocked_reason=blocked.reason_code if blocked else None,
+        blocked_detail=blocked.detail if blocked else None,
     )
 
 

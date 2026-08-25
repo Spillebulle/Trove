@@ -32,6 +32,30 @@ export const ACCOUNT_STATUS_TONE: Record<AccountStatus, Tone> = {
   disabled: 'neutral',
 }
 
+/*
+ * Why an offer sits unclaimed, in the few words a card has room for.
+ *
+ * "Not claimed yet" is the right thing to say when nothing has tried. It is
+ * the wrong thing to say when something tried and found a settled answer - an
+ * add-on whose game costs money will never be claimed by waiting, and a card
+ * that says "yet" quietly promises it will be. The sentence behind each of
+ * these is on the row's tooltip; these are the headlines.
+ *
+ * Unknown codes fall through to "Not claimed yet" on purpose: a build that
+ * learns a new reason before the interface does should say the vague true
+ * thing rather than a code.
+ */
+export const BLOCKED_LABEL: Record<string, string> = {
+  base_game_paid: 'Main game is paid',
+  base_game_manual: 'Claim the main game first',
+  base_game_failed: 'Main game did not claim',
+  base_game_unknown: 'Main game unknown',
+  // itch.io: free, but the sale gives a download rather than something the
+  // library keeps. An ordinary outcome there, not a fault.
+  download_only: 'Download only',
+  browser_only: 'Browser only',
+}
+
 export const OUTCOME_LABEL: Record<ClaimOutcome, string> = {
   claimed: 'Claimed',
   already_owned: 'Already owned',

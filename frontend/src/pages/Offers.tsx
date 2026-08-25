@@ -23,7 +23,14 @@ import { CalendarPlus, Gift, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import type { Offer } from '@/lib/types'
-import { fullTime, isUpcoming, relativeTime, shortDate, timeLeft } from '@/lib/utils'
+import {
+  BLOCKED_LABEL,
+  fullTime,
+  isUpcoming,
+  relativeTime,
+  shortDate,
+  timeLeft,
+} from '@/lib/utils'
 import {
   Art,
   EmptyState,
@@ -219,6 +226,17 @@ export function Offers() {
                             title={`Claimed on: ${offer.claimed_by.join(', ')}.`}
                           >
                             Claimed on {offer.claimed_by.length}
+                          </span>
+                        ) : offer.blocked_reason ? (
+                          /* Something tried and found a settled answer. Say
+                             which, because "Not claimed yet" reads as a thing
+                             still to come. `caution`, not `critical`: nothing
+                             is broken, there is just nothing to do here. */
+                          <span
+                            className="badge-caution"
+                            title={offer.blocked_detail ?? undefined}
+                          >
+                            {BLOCKED_LABEL[offer.blocked_reason] ?? 'Not claimed yet'}
                           </span>
                         ) : (
                           <span className="badge">Not claimed yet</span>

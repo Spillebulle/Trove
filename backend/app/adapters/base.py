@@ -82,10 +82,19 @@ class ClaimResult:
     `outcome` is one of `models.CLAIM_OUTCOMES`. `detail` is the sentence the
     ledger row shows, written for a person: "Already in your library." rather
     than "ownership_check returned true".
+
+    `reason_code` is the same answer as a word rather than a sentence, for the
+    interface to act on - `not_eligible` covers several situations that read
+    identically on a card and are not the same news. Optional: an adapter that
+    has nothing particular to say leaves it `None` and the interface falls back
+    to the general wording. The codes an adapter may use live beside the
+    branches that raise them, and the labels are in the frontend's
+    `BLOCKED_LABEL`.
     """
 
     outcome: str
     detail: str | None = None
+    reason_code: str | None = None
     key_code: str | None = None
     key_store: str | None = None
     screenshot: str | None = None

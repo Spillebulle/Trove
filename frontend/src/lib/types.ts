@@ -80,6 +80,9 @@ export interface Offer {
   first_seen_at: string | null
   last_seen_at: string | null
   claimed_by: string[]
+  /** Why it is unclaimed, when the reason is settled. See BLOCKED_LABEL. */
+  blocked_reason: string | null
+  blocked_detail: string | null
 }
 
 export interface Claim {

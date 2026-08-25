@@ -93,6 +93,10 @@ def _migrate(engine) -> None:
             # Existing rows default to "game", which is what they all were.
             "kind": "VARCHAR(20) NOT NULL DEFAULT 'game'",
             "image_url": "TEXT",
+            # 0.1.31: why a row is `not_eligible`, as a code. Rows written
+            # before this stay NULL, which reads as "no particular reason
+            # recorded" - the interface then says what it always said.
+            "reason_code": "VARCHAR(40)",
         },
         "offers": {
             # When the offer first appeared in the free list, which is what

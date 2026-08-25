@@ -145,6 +145,13 @@ class OfferRead(Read):
     # Which of the user's accounts already has this, so the offer list can say
     # "claimed by two of three" without a second request.
     claimed_by: list[str] = []
+    # Why nobody has it, when the reason is a settled one rather than "nothing
+    # has tried yet". Only set when no account has claimed it: a game one
+    # account owns is not blocked, whatever another account made of it. The
+    # sentence rides along for the tooltip, so the card can be short without
+    # being vague.
+    blocked_reason: str | None = None
+    blocked_detail: str | None = None
 
 
 # ── Claims ──────────────────────────────────────────────────────────────────

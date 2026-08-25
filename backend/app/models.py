@@ -254,6 +254,14 @@ class Claim(Base):
 
     outcome = Column(String(30), nullable=False, index=True)
     detail = Column(Text, nullable=True)
+    # *Why*, as a word the interface can act on, beside `detail`'s sentence for
+    # a person. One outcome can have several causes that read the same on a
+    # card - `not_eligible` shows as "Not claimed yet" whatever caused it - and
+    # they are not the same news: a DLC skipped because its game costs money is
+    # a settled fact somebody may want to act on, while one skipped because a
+    # check could not be read is not. Matching on `detail` would mean reading
+    # English back out of a sentence written for a person; this is the fact.
+    reason_code = Column(String(40), nullable=True)
 
     # A key handed out instead of a library add, which Prime Gaming does often.
     # Encrypted: it is worth money to whoever reads the database.
