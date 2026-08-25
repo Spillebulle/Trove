@@ -1047,6 +1047,49 @@ enabled, or "did not say why" - and all three click sites use it. **A
 diagnosis that names the wrong cause is worse than one that admits it does not
 know**: this one sent the reader hunting for an overlay that was never there.
 
+**Steam's DLC promotion, and three things wrong at once** (reported from a real
+run on the Flight Simulator soundtrack, 25 Aug 2026). All three are measured
+off `appdetails` and the live store page.
+
+1. **`type` does not say what an add-on is; `fullgame` does.** That promotion
+   answers `type: "music"`, not `"dlc"`, so `kind` was recorded as `game`,
+   **the runner's base-game prerequisite never ran**, and a claim was attempted
+   for an add-on to a game the account does not own. The catch was there all
+   along - `runner._satisfy_base_game`, triggered by `offer.kind == "dlc"` -
+   and the offer simply never reached it. Anything carrying a
+   `fullgame: {appid, name}` is an add-on to that game whatever Steam calls it.
+2. **So Steam can now answer the prerequisite properly.** `fullgame` names the
+   base game outright, which is easier than Epic's namespace mapping, so
+   `SteamAdapter.inspect_base_game` reports it: `owned` from the base game's
+   own store page (`OWNED`), and the price from `appdetails` for the sentence
+   the ledger writes. `offer` stays `None` - this adapter claims what discovery
+   found and does not go shopping for a base game. Unreadable stays `None`,
+   never `False`.
+3. **A page can carry a free package and a paid one.** The soundtrack listed a
+   "Limited Free Promotional Package - Aug 2026" at 0 cents beside a $9.99 sub.
+   Steam marks the free one `is_free_license`; `can_get_free_license` is *not*
+   the field to use, because it reads `"0"` on both when signed out - it
+   answers about the viewer, not the package. Discovery carries the free
+   packageid and the claim scopes its button to
+   `.game_area_purchase_game:has(input[name="subid"][value="<id>"])`.
+
+**And the refusal message was wrong.** It said the selectors in
+`ADD_TO_ACCOUNT` needed correcting. Measured on that page: there is **one**
+purchase block, it *is* the free package, its price reads 0,00 kr, its button
+reads **"Add to Account"** - and its href is `javascript:addToCart( 1789618 )`.
+So a cart action is not proof the wrong button was matched: **Steam routes some
+free packages through the basket.** The right answer is still to refuse, for a
+reason worth writing down - **a basket is shared state.** It can already hold
+things the person put there, and checking it out would buy them. That is not a
+risk to take on somebody's behalf for a free game, so the message now says so
+and asks them to claim that one themselves.
+
+`tools/steam_sim.py` covers all of it in CI - the free-package pick, the
+add-on rule, and `inspect_base_game`'s four answers - with no browser and no
+network. It earned its place immediately by catching a wrong field name
+(`BaseGame.price`, which is `price_note`) that would have raised on the first
+real DLC.
+
 One thing seen in passing and not acted on: Steam's second hit was
 `"type": "music"` (a soundtrack pack), which the adapter records as
 `kind="game"`. It is a real free-to-keep library item so claiming it is right,

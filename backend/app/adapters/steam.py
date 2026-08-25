@@ -79,6 +79,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 from ..browser import NeedsAttention, screenshot, screenshot_name
 from .base import (
     BaseAdapter,
+    BaseGame,
     ChallengeWaiter,
     ClaimResult,
     FreeOffer,
@@ -105,6 +106,33 @@ COUNTRY = "US"
 LANGUAGE = "english"
 
 UA = "Trove/0.1 (self-hosted free game claimer)"
+
+
+
+def _free_package_id(data: dict) -> int | None:
+    """The packageid of the free promotional sub, if the app has one.
+
+    Measured on the Flight Simulator soundtrack promotion, 25 Aug 2026: the
+    app's `package_groups` carried two subs, `is_free_license: true` on the
+    "Limited Free Promotional Package - Aug 2026" at 0 cents and
+    `is_free_license: false` on the $9.99 one. That flag is the store's own
+    statement of which package costs nothing, and it is what the claim scopes
+    its button to.
+
+    `can_get_free_license` is deliberately not used: it reads "0" on both subs
+    when nobody is signed in, so it answers a question about the *viewer*, not
+    about the package.
+    """
+    for group in data.get("package_groups") or []:
+        for sub in group.get("subs") or []:
+            if sub.get("is_free_license") and not sub.get(
+                "price_in_cents_with_discount"
+            ):
+                try:
+                    return int(sub["packageid"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+    return None
 
 
 def _app_url(appid: str) -> str:
@@ -403,17 +431,127 @@ class SteamAdapter(BaseAdapter):
                         title=confirmed.get("name") or row["title"] or row["appid"],
                         url=_app_url(row["appid"]),
                         image_url=confirmed.get("header_image"),
-                        kind="dlc" if confirmed.get("type") == "dlc" else "game",
+                        # **`fullgame`, not `type`, decides this.** Steam's
+                        # type vocabulary is its own: the Flight Simulator
+                        # soundtrack promotion answers `type: "music"`, and
+                        # keying off `type == "dlc"` recorded it as a game -
+                        # so the runner's base-game prerequisite never ran and
+                        # a claim was attempted for an add-on to a game the
+                        # account does not own. Anything carrying a `fullgame`
+                        # is an add-on to that game, whatever Steam calls it.
+                        kind=(
+                            "dlc"
+                            if (confirmed.get("fullgame") or {}).get("appid")
+                            or confirmed.get("type") == "dlc"
+                            else "game"
+                        ),
                         ends_at=(
                             datetime.fromtimestamp(ends, tz=timezone.utc)
                             if ends
                             else None
                         ),
                         source="store",
-                        extra={"appid": row["appid"]},
+                        extra={
+                            "appid": row["appid"],
+                            # The game this extends, straight off appdetails,
+                            # so `inspect_base_game` needs no second lookup.
+                            "base_appid": (confirmed.get("fullgame") or {}).get(
+                                "appid"
+                            ),
+                            "base_title": (confirmed.get("fullgame") or {}).get(
+                                "name"
+                            ),
+                            # The promotional package to claim. A page can
+                            # carry a free block *and* a paid one - the
+                            # soundtrack lists a "Limited Free Promotional
+                            # Package" beside a $9.99 sub - and the free one
+                            # is the sub Steam marks `is_free_license`. The
+                            # claim scopes its button to this package rather
+                            # than taking whichever purchase block comes
+                            # first, which is how an add-to-cart got matched.
+                            "free_packageid": _free_package_id(confirmed),
+                        },
                     )
                 )
             return offers
+
+    async def inspect_base_game(self, page: Page, offer: FreeOffer) -> BaseGame | None:
+        """The game this add-on extends, and whether the account has it.
+
+        Steam names the prerequisite itself: an add-on's `appdetails` carries
+        `fullgame: {appid, name}`, which discovery already read and put in
+        `extra`. So there is no guessing at what a DLC belongs to the way
+        Epic's namespace mapping needs - the store says it outright.
+
+        What still has to be looked at is the *account*, and that needs the
+        signed-in page: the base game's store page shows the already-owned
+        banner (`OWNED`) when the library has it. Everything unreadable stays
+        `None`, never `False`, because the runner treats "could not tell"
+        differently from "does not own it" and only the second is a finding.
+
+        `offer` is left `None` throughout: this adapter claims free-to-keep
+        promotions found by discovery, and it does not go shopping for a base
+        game on its own. A free base game will turn up in discovery on its own
+        merits if it is ever free; a paid one is not Trove's to buy. So the
+        answer here is "owned" or "you need this first", which is what the
+        person needs to read.
+        """
+        base_appid = offer.extra.get("base_appid")
+        base_title = offer.extra.get("base_title")
+        if not base_appid:
+            return None  # not an add-on, or Steam did not say what it extends
+        base_url = _app_url(str(base_appid))
+        title = base_title or f"app {base_appid}"
+
+        try:
+            await _goto(page, base_url)
+        except PlaywrightTimeout:
+            logger.info(
+                "Steam: could not load %r (%s) to check whether it is owned.",
+                title, base_url,
+            )
+            return BaseGame(title=title, url=base_url)
+
+        # An age gate or a signed-out page is not an answer about ownership.
+        if await _first_visible(page, SIGNED_OUT, timeout_ms=800):
+            logger.info("Steam: signed out while checking %r.", title)
+            return BaseGame(title=title, url=base_url)
+
+        owned = bool(await _first_visible(page, OWNED, timeout_ms=2500))
+        if owned:
+            return BaseGame(title=title, url=base_url, owned=True)
+
+        # Not owned. What it costs decides how the runner words it, and the
+        # price comes from the store's own API rather than the page, because
+        # the page renders a price in several shapes and this one is a fact
+        # that does not need scraping.
+        free: bool | None = None
+        price_note: str | None = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=20.0, headers={"User-Agent": UA}
+            ) as client:
+                response = await client.get(
+                    APPDETAILS_URL,
+                    params={"appids": str(base_appid), "cc": COUNTRY, "l": LANGUAGE},
+                )
+                response.raise_for_status()
+                data = (response.json().get(str(base_appid)) or {}).get("data") or {}
+            if data:
+                title = data.get("name") or title
+                overview = data.get("price_overview") or {}
+                if data.get("is_free") and not overview:
+                    free = True  # free to play, so nothing stands in the way
+                elif overview:
+                    free = overview.get("final") == 0
+                    price_note = overview.get("final_formatted")
+        except Exception as exc:
+            logger.info("Steam: could not price %r: %s", title, exc)
+
+        return BaseGame(
+            title=title, url=base_url, owned=False, free=free, price_note=price_note
+        )
+
 
     async def _confirm_free_to_keep(
         self, client: httpx.AsyncClient, appid: str
@@ -579,7 +717,41 @@ class SteamAdapter(BaseAdapter):
                 detail="Steam will not grant this to your account, usually a region limit.",
             )
 
-        button = await _first_visible(page, ADD_TO_ACCOUNT, timeout_ms=8000)
+        # **Scope the search to the free promotional package where there is
+        # one.** A store page can carry more than one purchase block: the
+        # Flight Simulator soundtrack promotion listed a "Limited Free
+        # Promotional Package" *and* a $9.99 sub, and an unscoped search took
+        # whichever block came first and matched an add-to-cart - caught by
+        # the never-spend guard below, which is the right outcome but the
+        # wrong block. Steam marks the free sub `is_free_license`, discovery
+        # carries its packageid, and each purchase block names its own sub in
+        # a hidden `input[name="subid"]`, so the two can be tied together.
+        #
+        # Best effort by design: a page whose free block cannot be found this
+        # way falls back to the unscoped list, and the never-spend guard is
+        # what actually stops a paid click either way. This only makes the
+        # right button easier to find; it is not the thing keeping the money
+        # in the account.
+        package_id = offer.extra.get("free_packageid")
+        button = None
+        if package_id:
+            scoped = [
+                f'.game_area_purchase_game:has(input[name="subid"][value="{package_id}"]) '
+                + selector.split(" ", 1)[1]
+                if selector.startswith(".game_area_purchase_game ")
+                else selector
+                for selector in ADD_TO_ACCOUNT
+            ]
+            button = await _first_visible(page, scoped, timeout_ms=4000)
+            if button is None:
+                logger.info(
+                    "Steam: no free-package block for sub %s on %r; falling "
+                    "back to the unscoped search.",
+                    package_id,
+                    offer.title,
+                )
+        if button is None:
+            button = await _first_visible(page, ADD_TO_ACCOUNT, timeout_ms=8000)
         if button is None:
             raise NeedsAttention(
                 "Could not find the \"Add to Account\" button on the store "
@@ -690,10 +862,23 @@ class SteamAdapter(BaseAdapter):
         except Exception:
             action = ""
         if any(cart in action for cart in _CART_ACTIONS):
+            # Measured 25 Aug 2026 on the Flight Simulator soundtrack
+            # promotion: the page's only purchase block *is* the free package
+            # (`subid` matches the `is_free_license` sub, the price shows
+            # 0,00 kr), the button reads **"Add to Account"** - and its href
+            # is `javascript:addToCart( 1789618 )`. So a cart action is not
+            # proof that the wrong button was matched. Steam routes some free
+            # packages through the cart, and the honest answer is that Trove
+            # will not drive a cart checkout: **a cart is shared state.** It
+            # can already hold things the person put there, and confirming it
+            # would buy those too. That is not a risk this app takes on the
+            # user's behalf for a free game.
             raise NeedsAttention(
-                "The matched button is an add-to-cart, which leads to a paid "
-                "checkout. Trove does not buy anything; the selectors in "
-                "steam.ADD_TO_ACCOUNT need correcting.",
+                "Steam puts this one in the basket rather than granting it "
+                "outright, and Trove will not check a basket out - it may "
+                "hold things you put there yourself, and confirming it would "
+                "buy them. Claim this one on Steam yourself; it takes a "
+                "moment and Trove will see it is owned on the next run.",
                 await self._shot(page, offer, "cart-refused"),
             )
         if any(free in action for free in _FREE_ACTIONS):
