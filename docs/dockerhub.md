@@ -3,8 +3,9 @@
 # Trove
 
 Claims the games that are temporarily free on stores you already have accounts
-with, starting with the Epic Games Store. Self-hosted, one browser profile per
-account, a ledger of every attempt, and Discord or webhook notifications.
+with: Epic, Steam, GOG, itch.io and Prime Gaming. Self-hosted, one browser
+profile per account, a ledger of every attempt, and Discord or webhook
+notifications.
 
 Source and full documentation: **https://github.com/Spillebulle/Trove**
 
@@ -51,11 +52,17 @@ marks the account, and tells you. It does not retry.
 
 ## The one thing to know before you start
 
-**The container cannot do the first sign-in.** It has no screen you can see, so
-the "sign in here" button is refused there, and an interactive Cloudflare
-challenge can refuse the streamed live view too.
+**Every account needs one sign-in by hand.** The container has a virtual screen
+of its own, and "Sign in here" opens that account's Chrome on it with nothing
+attached to it - no remote control, no automation flags - and shows you the
+screen in the page. You sign in, answer whatever the store asks, and press
+"Done, close the window". Trove reuses that session from then on.
 
-Sign in on a desktop machine running Trove, then copy that account's folder:
+If a store keeps looping you through a verification there, the address is the
+usual reason: a datacenter address is challenged far more readily than a home
+one, and `BROWSER_PROXY` (`socks5://host:port`) points the browser's traffic
+somewhere else without moving Trove. Failing that, sign in on a desktop running
+Trove and copy that account's folder:
 
 ```
 data/profiles/<id>-<slug>/
@@ -77,6 +84,7 @@ runs in the container normally.
 | `DATA_DIR` | `/data` | Database, browser profiles, screenshots, generated keys. |
 | `DEFAULT_INTERVAL_HOURS` | `8` | How often an account is checked, unless it sets its own. |
 | `BROWSER_CHANNEL` | `auto` | Uses the real Chrome in the image. Leave it alone. |
+| `BROWSER_PROXY` | empty | `socks5://host:port` for the browser's traffic only, for a container on a datacenter address. |
 | `TZ` | `Europe/Oslo` | |
 
 Back up `./data`. It holds the database, the encryption keys and your
@@ -84,11 +92,13 @@ signed-in browser sessions; lose it and every account signs in by hand again.
 
 ## Status
 
-Early. One store works end to end, the interface is complete, and the sign-in
-flow has been proven against the live store. Epic's checkout is written but has
-never run against a signed-in account, and no container has yet been started
-from this image in anger. The repository's `CLAUDE.md` keeps an honest list
-under "What is verified and what is not".
+Early, and specific about which parts. The whole loop has run once against a
+real Epic account in a container: a giveaway found, the checkout driven, the
+captcha finished by a person, the game read back out of the library and written
+to the ledger. The other four stores have adapters whose discovery is measured
+against the live service and whose claiming has not yet met a live giveaway.
+The repository's `CLAUDE.md` keeps an honest list under "What is verified and
+what is not".
 
 ## Licence
 

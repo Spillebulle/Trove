@@ -8,15 +8,19 @@
 
 <p align="center">
   A self-hosted claimer for the games that are <b>temporarily free</b> on stores you already have accounts with.<br>
-  Epic Games Store · one browser profile per account · a ledger of every attempt · Discord or webhook notifications
+  Epic · Steam · GOG · itch.io · Prime Gaming<br>
+  One browser profile per account, a ledger of every attempt, Discord or webhook notifications
 </p>
 
 ![The Trove overview: four stat tiles, the accounts waiting for a hand, what is free right now, and recent activity.](docs/images/01-overview.png)
 
-> **Early days.** One store works end to end (Epic), the interface is complete,
-> and the sign-in and challenge flow has been used against the real store. The
-> claim step itself has not yet been run against a signed-in Epic account, so
-> its page selectors are unproven. See [what is not there yet](#what-is-not-there-yet).
+> **Early days, and honest about which parts.** The whole loop has run against a
+> real account: Trove found a giveaway, drove the checkout, stopped at Epic's
+> captcha, a person finished that one order, and Trove read the library and
+> wrote the row. That is Epic, once. The other four stores have adapters whose
+> discovery is measured against the live service and whose claiming has not yet
+> met a live giveaway. See [which stores](#which-stores) and
+> [what is not there yet](#what-is-not-there-yet).
 
 ## What it does
 
@@ -26,6 +30,18 @@ rather than a password, so a healthy account signs in once by hand and never
 again.
 
 When a store asks a question it cannot answer, it stops and asks you.
+
+## Which stores
+
+| Store | What Trove claims there | How far it has been proven |
+|---|---|---|
+| **Epic Games Store** | The weekly giveaway, add-ons included. An add-on is only claimed when the account owns the game it belongs to. | A real game claimed end to end. |
+| **Steam** | The rare "free to keep" promotions: a paid game temporarily 100 % off that stays in your library. Never free-to-play, never free weekends, never anything in a basket. | Discovery measured against the live store. No promotion has run since. |
+| **GOG** | The giveaway the front page runs. Claiming it subscribes you to GOG's newsletter, which is GOG's rule and not Trove's. | Discovery measured. No giveaway has run since. |
+| **itch.io** | Games on a 100 % sale, which stay in your library for keeps. Usually ten or more at once, so discovery is capped per run. | Discovery measured live. The claim needs a signed-in account. |
+| **Prime Gaming** | The keep-forever games. Some are keys for other stores: Trove records the key, encrypted, and never redeems it anywhere. Needs an active Prime subscription. | Written from Amazon's own conventions. Nothing measured behind its login. |
+
+EA and Ubisoft give games away occasionally and have no adapter yet.
 
 ## Install
 
@@ -51,29 +67,28 @@ services:
 `admin`. The same image is on Docker Hub as `spillebulle/trove` if you prefer
 it. Images are `linux/amd64` only, because the image installs real Google
 Chrome and Google ships no Chrome for Linux on arm64, and they are published
-from `v*` tags only - there is no build from the tip of main. The image carries a real Chrome, so it is around 2 GB and wants
-`shm_size: 1gb`; below about 512 MB Chrome crashes part-way through a store
-page. Everything else, including the two encryption keys, is generated into
-`./data` on the first start. Back that directory up and you have backed up your
-signed-in sessions.
+from `v*` tags only - there is no build from the tip of main. The image carries
+a real Chrome, so it is around 2 GB and wants `shm_size: 1gb`; below about
+512 MB Chrome crashes part-way through a store page. Everything else, including
+the two encryption keys, is generated into `./data` on the first start. Back
+that directory up and you have backed up your signed-in sessions.
 
 > **Signing in inside the container.** The container has a screen of its own -
 > a virtual one - and "Sign in here" opens the account's Chrome on it with
-> nothing attached: no remote control, no automation flags. Trove then shows
-> you that screen in the page, you sign in, and you press "Done, close the
-> window". If the store keeps looping you through a verification there, press
-> "Start a fresh profile" first - a profile that has been refused once tends to
-> keep being refused - and if that is not it, the address probably is (a
-> datacenter address gets challenged far more than a home one; `BROWSER_PROXY`
-> can give the browser a home one). Failing all that, sign in on a desktop and copy
+> nothing attached: no remote control, no automation flags. Trove shows you
+> that screen in the page, you sign in, and you press "Done, close the window".
+> If the store keeps looping you through a verification there, press "Start a
+> fresh profile" first - a profile that has been refused once tends to keep
+> being refused - and if that is not it, the address probably is (a datacenter
+> address gets challenged far more than a home one; `BROWSER_PROXY` can give
+> the browser a home one). Failing that, sign in on a desktop and copy
 > `data/profiles/<id>-<slug>/` into the container's volume, then press "Check
-> again" on the account. Either way, everything after that - the schedule,
-> claiming, the ledger, notifications - runs in the container normally.
+> again" on the account.
 >
-> Settings has a **Check the browser** button that launches the browser the way
-> a claim run does and reports what a store page sees - which Chrome, which
-> codecs, whether WebGL and WebGPU exist. Run it first on a new install; every
-> captcha that has beaten this app was explained by one of those lines.
+> Settings has a **Check the browser** button that reports what a store page
+> sees - which Chrome, which codecs, whether WebGL and WebGPU exist. Run it
+> first on a new install; every captcha that has beaten this app was explained
+> by one of those lines.
 
 ## Signing in, once
 
@@ -91,43 +106,52 @@ plain Chrome with nothing attached to it, and you at the controls.
 
 ![The container's own screen: real Chrome on the Epic store, opened by "Sign in here" inside Docker and captured over VNC by the smoke test - no captcha in sight.](docs/images/08-container-screen.png)
 
-The live view above is the other fallback: the account's browser, streamed
-into the page over the browser's own debugging protocol. It is fine for looking
-and for simple sign-ins, but a store that puts up an interactive captcha may
-refuse it no matter how honestly you click, because a page can tell that
-protocol is attached.
+The live view above is the other fallback: the account's browser, streamed into
+the page over its own debugging protocol. It is fine for looking and for simple
+sign-ins, but a store that puts up an interactive captcha may refuse it however
+honestly you click, because a page can tell that protocol is attached.
 
 Trove never signs in with a store password on its own. You *can* store the
 account's email, password and authenticator secret (encrypted) so that when
 you sign in on the container's screen, Trove types them into the form at the
 press of a button, the way a password manager would - or press **Sign in for
-me** and it types the email, presses Enter, types the password and presses
-Enter in sequence, leaving only the captcha (and a 2FA code, if you use one) to
-you. Nothing that runs on a schedule can read the details.
+me** and it follows that store's own form, which is a different sequence on
+each of them, leaving the captcha (and a 2FA code, if you use one) to you.
+Nothing that runs on a schedule can read the details.
 
 Check **Remember me** when you sign in: without it Epic's session is dropped
 when the browser closes, and no amount of session-keeping can hold it.
 
-## If the checkout fails with a network error
+## When the checkout asks for a captcha
 
-If a claim gets through the captcha and the dialogs but then shows Epic's **"An
-error occurred while trying to process your request. Please check your network
-connection"**, that error is from Epic and it is almost always **IPv6**: the
-container reaches Epic's `*.ol.epicgames.com` payment hosts over IPv6, which has
-no working route, and the order request hangs. Turn IPv6 off in the container -
-uncomment the `sysctls` block in `docker-compose.yml`
-(`net.ipv6.conf.all.disable_ipv6=1`) and `docker compose up -d` again. Trove
-also names the failing request in the account's attention message, so you can
-see which host it was.
+Epic can put a captcha in front of the order itself, and **a captcha solved in
+the driven browser is refused** - measured, from a real account: the order came
+back `HTTP 400 epic.error.captcha.challenge.failed` with the answer attached.
+The browser is not blocked, its *solve* is, because the page can tell it is
+being driven.
+
+So Trove stops rather than hammering it, and the account page offers **Finish
+the claim here**. That opens the same un-driven window signing in uses, pointed
+straight at that offer's checkout. You press Add to library, answer the
+captcha, accept, and close the window; Trove then asks the store whether it
+worked, and writes a `claimed` row only if it did. Until then it never re-drives
+that checkout - a stream of failed challenges is the one thing this app exists
+to avoid - and if the giveaway ends unfinished it says so in the ledger.
+
+If a claim instead shows Epic's **"check your network connection"**, that is
+almost always IPv6: the container reaches Epic's `*.ol.epicgames.com` payment
+hosts over a route that does not work, and the order hangs. Uncomment the
+`sysctls` block in `docker-compose.yml` (`net.ipv6.conf.all.disable_ipv6=1`)
+and bring it up again. Trove names the failing request in the account's
+message, so you can see which host it was.
 
 ## Watching a claim
 
 Once you are signed in, **Run and watch** runs the claim on the container's
-screen and shows it to you live: the store loads, your session is checked, and
-the checkout is attempted. If it stops - Epic changes its checkout often - the
-browser is held open on the page it stopped at, so you can see exactly what it
-showed rather than guessing from a screenshot. Press Done when you have seen
-enough.
+screen and shows it to you live: the store loads, your session is checked, the
+checkout is attempted. If it stops - Epic changes its checkout often - the
+browser is held open on the page it stopped at, so you can read what the store
+actually showed rather than guessing from a screenshot.
 
 **It needs real Google Chrome.** Playwright's bundled Chromium ships without
 H.264, HEVC and AAC while telling every site it is Chrome, and Cloudflare's
@@ -140,9 +164,20 @@ chrome`. Trove picks it up on its own and logs which browser it drove.
 
 ![The free-now page: a card per giveaway with the store's own artwork, how long is left, and whether it has been claimed.](docs/images/03-free-now.png)
 
-Finding out what is free costs one request to a public endpoint and touches no
-account, so it happens whether or not anything is signed in. The browser only
-wakes up when there is something to claim.
+Finding out what is free costs one request to a public endpoint per store and
+touches no account, so it happens whether or not anything is signed in. The
+browser only wakes up when there is something to claim. A card's picture and
+its store badge open the store's own page.
+
+Below the grid, **Coming up** lists what a store has announced for next week,
+and **Download calendar** saves the lot as an `.ics` you can import - the
+deadlines of what is free now, and the windows of what is announced. When an
+announced giveaway actually goes live, Trove notices within a few hours and
+brings that store's next run forward rather than waiting out the interval.
+
+Prime Gaming is the one exception: Amazon renders its offers only for a
+signed-in session, so a Prime run has to open the browser to find out what is
+there.
 
 ## When something needs you
 
@@ -169,18 +204,22 @@ sent back to the browser.
 
 Every attempt is a row, including the ones that found the game already in your
 library, which is most of them after the first week. Trove never claims a game
-it cannot show you a row for. Keys, where a store hands one out instead of
-adding to a library, are encrypted and revealed one at a time.
+it cannot show you a row for. Where something was not claimed and there is a
+settled reason - the add-on's game costs money, itch.io only offers a download -
+the row says which, rather than leaving it to look like a thing still to come.
+Keys, where a store hands one out instead of adding to a library, are encrypted
+and revealed one at a time.
 
 ## What is not there yet
 
 | | |
 |---|---|
-| **Epic claiming, proven** | Discovery is verified against Epic's live endpoint. The checkout flow is written but its selectors have not been run against a signed-in account, so the first real claim may need them corrected. They are all in one table at the top of `backend/app/adapters/epic.py`. |
-| **Other stores** | Prime Gaming, GOG, Steam, EA and Ubisoft are designed for and not written. One store had to work end to end first. |
+| **A second claim, anywhere** | One real claim proves the path exists, not that it is reliable, and four of the five stores have never completed one. Each store's first live giveaway is its measurement, and its selectors are in one table at the top of its adapter. |
+| **Prime Gaming behind the login** | Amazon's signed-out page is an empty shell, so every selector in that adapter is written from Amazon's own frontend conventions rather than from a page anybody has read. |
+| **In-game loot** | Prime's drops for games you already own are filtered out at discovery. Keep-forever games only. |
+| **EA and Ubisoft** | No adapter. |
 | **The public giveaway feed** | The setting exists and is off. GamerPower is the obvious candidate and its terms have not been checked. |
-| **TOTP** | An account can store a secret, encrypted, but nothing types a code with it yet. |
-| **Tests** | There is no test suite. The flows in this README were verified by driving the running app. |
+| **A test suite** | There are simulations of the tricky flows (`tools/*_sim.py`) that run in CI with no browser and no network, and a container smoke workflow that starts the image and probes the browser. There is no unit test suite behind them. |
 
 ## Configuration
 
@@ -189,8 +228,9 @@ adding to a library, are encrypted and revealed one at a time.
 | `ADMIN_PASSWORD` | `changeme` | The password for Trove itself. Set it before the first start. |
 | `DATA_DIR` | `/data` | Database, browser profiles, screenshots, generated keys. |
 | `DEFAULT_INTERVAL_HOURS` | `8` | How often an account is checked, unless it sets its own. |
+| `DISCOVERY_INTERVAL_HOURS` | `3` | How often Trove asks the stores what is free. Costs one request per store and touches no account. |
 | `TROVE_HEADLESS` | `false` | Headed is the default because headless is a signal bot detection reads. |
-| `BROWSER_CHANNEL` | `auto` | Drives real Google Chrome when it is there. Leave it alone: see below. |
+| `BROWSER_CHANNEL` | `auto` | Drives real Google Chrome when it is there. Leave it alone: see the note under [watching a claim](#watching-a-claim). |
 | `VNC_ADDRESS` | `127.0.0.1:5900` in the image | Where the container's screen is served from. Trove bridges it through its own login; nothing else can reach it. Set empty to turn the screen view off. |
 | `BROWSER_PROXY` | empty | `socks5://host:port` for the browser's traffic only. A store challenges a cloud address far more than a home one; an SSH `-D` tunnel home fixes that without moving Trove. |
 
@@ -210,6 +250,10 @@ $env:DATA_DIR="./data"; backend/.venv/Scripts/python -m uvicorn app.main:app --a
 # Frontend, in a second terminal
 cd frontend; npm install; npm run dev
 ```
+
+The screenshots above are generated, not taken: `python tools/shots.py` builds
+the frontend, seeds a throwaway database, asks the stores what is actually free
+and photographs the running app. It never touches your data directory.
 
 ## Licence
 
