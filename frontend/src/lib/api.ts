@@ -21,6 +21,17 @@ export class ApiError extends Error {
   }
 }
 
+/** What `POST /accounts/{id}/type` can type into the sign-in window. */
+export type TypeWhat = 'email' | 'password' | 'code' | 'enter' | 'tab'
+
+/** One shape a store's login form takes, and the steps that fill it in. */
+export type SignInForm = {
+  key: string
+  label: string
+  description: string
+  steps: { action: TypeWhat; label: string; wait_ms: number }[]
+}
+
 type Query = Record<string, string | number | boolean | null | undefined>
 
 function withQuery(path: string, query?: Query): string {
@@ -113,12 +124,21 @@ export const api = {
     finishClaim: (id: number) => post<Account>(`/api/accounts/${id}/finish-claim`),
     checkSession: (id: number) => post<Account>(`/api/accounts/${id}/check-session`),
     canSignInHere: (id: number) =>
-      request<{ ok: boolean; via: 'desktop' | 'screen' | null; reason: string | null }>(
-        `/api/accounts/${id}/can-sign-in-here`,
-      ),
+      request<{
+        ok: boolean
+        via: 'desktop' | 'screen' | null
+        reason: string | null
+        // The shapes this store's login form comes in, for "Sign in for me".
+        // Empty when nobody has looked at that store's form, which hides the
+        // button; more than one when the store has more than one form (GOG
+        // asks a remembered account for the password alone) and the person
+        // picks the one they can see on the screen.
+        sign_in_forms?: SignInForm[]
+        sign_in_note?: string | null
+      }>(`/api/accounts/${id}/can-sign-in-here`),
     closeSignIn: (id: number) => post<void>(`/api/accounts/${id}/close-sign-in`),
     // Type a stored detail into the sign-in window on the container's screen.
-    typeIntoScreen: (id: number, what: 'email' | 'password' | 'code' | 'enter' | 'tab') =>
+    typeIntoScreen: (id: number, what: TypeWhat) =>
       post<void>(`/api/accounts/${id}/type`, { what }),
     canOpenLive: (id: number) =>
       request<{ ok: boolean; reason: string | null }>(`/api/live/${id}/can-open`),

@@ -510,6 +510,36 @@ find the button that places the order", watch a run, read the real label off
 the screen, and add it there. The claim now logs each checkout step, so the
 container log narrates it too.
 
+**Chrome's own pop-ups are turned off, because they land on the click**
+(0.1.24). The save-password bubble appears the instant a sign-in succeeds -
+over whatever the store puts up next, which is usually the 2FA prompt - and the
+"password found in a data breach" dialog is modal. On a display with **no
+window manager** neither can be dragged aside. Two mechanisms, one per
+platform, and neither is visible to the page: `docker/chrome-policy.json` is an
+enterprise policy the image drops in `/etc/opt/chrome/policies/managed/`, which
+covers **both** browsers and needs no flags (the `--no-sandbox` infobar was
+already suppressed this way); and `browser.quiet_profile` writes the same
+settings into the profile's own preferences, which is the only route on a
+desktop, since a machine-wide policy is not this app's to install. It merges
+rather than overwrites, writes atomically, and swallows every error - a profile
+is a session that cost a person and a captcha, and losing one to a preferences
+write would be far worse than a bubble.
+
+**The handover after a sign-in window closes is a wait, not a sleep** (0.1.24).
+It used to be `sleep(3)`, a guess at how long Chrome takes to finish. Chrome's
+exit is not instant after the process is gone: the network service flushes the
+cookie database on the way out, and the session the person just made is in that
+flush. Open the profile too early and the check reads the cookies as they were
+*before* the sign-in and reports a freshly signed-in account as signed out -
+and signing in again then "works", because by then the first Chrome has
+finished. `browser.wait_for_profile_release` waits for the thing itself: Chrome
+removes `SingletonLock`, `SingletonCookie` and `SingletonSocket` when it lets
+go of a directory. One trap - **`SingletonLock` is a symlink to `<host>-<pid>`
+that points at nothing**, so `Path.exists()` follows it, finds no target and
+answers False for a lock that is very much there; it takes `os.path.lexists`.
+A timeout carries on regardless, because a stale lock from a crashed Chrome
+must not block sign-in forever.
+
 **Typing into that window** is `keyboard.py`: `xdotool type --file -` through
 the X server (XTEST) into the focused window, which on that screen is the
 un-driven Chrome; the text goes on stdin, never argv. `POST
@@ -518,6 +548,78 @@ the stored detail (the TOTP code is computed in `crypto.totp_code`, RFC 6238,
 checked against the RFC's vectors) and the screen view has a button per
 item. It works only while that account's sign-in window holds the profile and
 only where there is a DISPLAY and xdotool, which is the container.
+
+**"Sign in for me" is the adapter's sequence, not one flow for every store
+(0.1.24).** The button types the stored details in, waits a beat and types
+again - blind, because the window it types into has nothing attached to it,
+which is the whole point of that window. So the *order* is a fact about the
+store's own login form, and it was written against Epic's: email, Enter,
+wait, password, Enter. Epic asks for the email first and only renders the
+password field after Continue. **Steam does not** - username and password sit
+on one page with a "Remember me" checkbox - so that Enter submitted the form
+with an empty password. A failed login attempt, then a password typed into
+whatever had focus, then a second failed attempt: three things this app exists
+to avoid, on the one account it must not get locked.
+
+The sequence now lives on the adapter (`base.SignInStep`,
+`BaseAdapter.sign_in_sequence`) and rides out on `can-sign-in-here`, which
+already knows the account's store. Two rules keep it honest:
+
+- **Empty is the default, and empty hides the button.** A sequence is a claim
+  about a page nobody can see while it runs; guessing one is how you get a
+  lockout. The one-at-a-time Email / Password / Code buttons still work
+  everywhere, because the person clicks the field first and Trove only types.
+  **Amazon is the one store still empty**, and its adapter says so where the
+  sequence would go, and says what to observe.
+
+**A store has more than one form, and Trove cannot tell which is up.** GOG
+shows a first-time visitor email + password, and a browser it remembers the
+account's avatar, name and a *single* password field with "Change account"
+underneath - both screenshotted, 25 Aug 2026. The second is the common case
+here, because a profile is reused forever. Typing the first form's steps into
+it puts the email address in the password box and submits: a failed login whose
+password is an email address, which is the shape of credential stuffing rather
+than of a person.
+
+Detecting which is on screen would mean reading the page, and the window has
+nothing attached to it - which is the whole reason the store's captcha accepts
+it. So `sign_in_forms` is a *list* of shapes, each a button, and **the person
+presses the one they can see**. That is the same division of labour as the rest
+of the app: the automation stops where a person is already looking, and does
+not guess.
+
+**The four forms that have been looked at (25 Aug 2026, screenshots):**
+
+| Store | Shape | Sequence |
+|---|---|---|
+| Epic | email-first; the password field does not exist until Continue | email, **enter**, wait 3 s, password, enter |
+| Steam | username + password on one page, "Remember me" | email, **tab**, password, enter |
+| itch.io | "Username or email" + password on one page, no remember-me | email, **tab**, password, enter |
+| GOG (first time) | a *dialog*: Google/Steam/Discord/Xbox buttons, then email + password | email, **tab**, password, enter |
+| GOG (remembered) | avatar, name, address, one password field, "Change account" | password, enter |
+
+Epic is the odd one out, and it is the one the original hardcoded sequence was
+written against - which is exactly how it came to type an Enter into three
+other stores' half-filled forms.
+
+**Two things the GOG entry records that the table cannot.** Its log-in is a
+dialog with four sign-in buttons stacked above the fields, so nothing measured
+says where focus lands when it opens - hence the note asking for a click on the
+Email field first, which is also why Steam and itch.io carry that line (only
+Epic's autofocus is measured). And GOG asks for a security code *after* the
+password which is **emailed, not generated**: the stored TOTP secret cannot
+produce it, so the sequence stops at the password and the Code button must
+never be pointed at that field. The person reads their mail, types the code on
+the screen and presses Continue.
+- **`sign_in_note` carries what the sequence cannot do.** It cannot tick a
+  checkbox, and an unticked "Remember me" is a session cookie that no profile
+  survives a restart with - the 0.1.8 bug, arrived at from the other end. The
+  note is shown in the dialog subtitle, not a tooltip, because it has to be
+  read before the sign-in rather than discovered after it.
+
+`SignInStep.__post_init__` rejects an action the type endpoint cannot type, so
+a typo is an import error rather than a 422 in the middle of a half-filled
+login form.
 
 Why VNC here when the live view was deliberately *not* VNC: the live view's
 objection to noVNC was a second process for a picture CDP already provided.
@@ -821,6 +923,78 @@ endpoint.
   against live data; the page-reading half - CTA wording, the offer-id regex -
   is not, and will first be exercised on the Mage Bundle.**
 
+**Discovery was measured against all five stores, 25 Aug 2026, and two of the
+four new adapters found nothing because they were wrong - not because nothing
+was free.** Both failed the same way: a 200, a full payload, and a cheerful
+empty list. This is the failure mode to expect from an adapter written from
+reasoning rather than observation, and it is invisible without looking.
+
+- **itch.io: the cell split assumed attribute order.** `_CELL_SPLIT` was
+  `<div data-game_id="`, and the live grid renders `<div dir="auto"
+  data-game_id="… " class="game_cell …">`. Nothing split, every cell was
+  skipped, **11 free games** read as zero. `_links` in the same file was
+  deliberately written attribute-order-independent; the split was not. Fixed
+  to `<div[^>]*data-game_id="`, and the listing now logs an **error** when it
+  gets markup and parses no cell out of it - the guard Steam already had and
+  itch.io did not.
+- **Steam's free-to-keep test was factually wrong.** The rule was
+  `discount_percent == 100 and final == 0`, reasoned from a partly discounted
+  game and flagged unverified in this file. A live 100 %-off promotion
+  actually answers:
+
+  ```
+  {"initial": 1499, "final": 1499, "discount_percent": 100,
+   "final_formatted": "Free"}
+  ```
+
+  **`final` is the undiscounted price, not zero.** So the rule rejected every
+  free-to-keep game there was. It is now the discount alone, which still
+  separates the case from a free weekend (playtime, not a discount, so
+  `discount_percent` is not 100) and from free-to-play (no `price_overview` at
+  all). `final_formatted` cross-checks where present but never vetoes: it is a
+  localised string and the discount is the fact.
+- **GOG's zero is correct.** Its sections endpoint answered with 20 sections
+  and no `GIVEAWAY_SECTION`, which is what "no giveaway this week" looks like.
+  The payload shape is confirmed; a live giveaway section still is not.
+- **Prime's zero is by construction** (`discovery_needs_session`), and says
+  nothing about whether it works.
+
+**And the itch.io claim: "something is covering it" was the wrong diagnosis**
+(reported from a real run on "Fear Assessment", 25 Aug 2026). Every click
+failure in that adapter was reported as an overlay. Reproduced with
+Playwright's `click(trial=True)` - which runs the full actionability check and
+clicks nothing, so it is safe to point at a live store page - and what
+Playwright actually said was:
+
+```
+2 x waiting for element to be visible, enabled and stable
+  - element is not stable
+```
+
+**Nothing was covering it. The button would not stop moving.** That page keeps
+reflowing while its art loads, and its buy button sits at y≈1512; a game that
+claims fine has its button at y≈382 and settles. `scroll_into_view_if_needed`
+timed out on the same page, which is the same fact from the other side.
+
+Two fixes, and the first is Epic's lesson again: **drive to the URL, do not
+fight the product page.** The button is a plain `<a href=".../purchase">`, so
+the adapter now reads the href and navigates, which cannot be blocked by a
+layout that will not settle. Measured on both games: `/purchase` answers 200
+with the same pay-what-you-want form and the "No thanks, just take me to the
+downloads" link at a stable y≈249, trial-clickable. The click stays as the
+fallback for a button with no href.
+
+The second: `_why_blocked()` turns the Playwright failure into the reason it
+actually gave - not stable, intercepts pointer events, not visible, not
+enabled, or "did not say why" - and all three click sites use it. **A
+diagnosis that names the wrong cause is worse than one that admits it does not
+know**: this one sent the reader hunting for an overlay that was never there.
+
+One thing seen in passing and not acted on: Steam's second hit was
+`"type": "music"` (a soundtrack pack), which the adapter records as
+`kind="game"`. It is a real free-to-keep library item so claiming it is right,
+but the ledger will call it a game.
+
 - **Prime Gaming** (what the user called Twitch Prime; Twitch Prime was renamed
   years ago) — built (`adapters/prime.py`), keep-forever **games only** in v1;
   in-game loot drops are filtered out at discovery and are future work. Needs
@@ -964,6 +1138,12 @@ endpoint.
   and free-to-play adds, claimed from the store page. Do not build Steam as if
   it were Epic. Steam Guard makes an unattended login unrealistic, which is
   another reason sessions matter more than credentials.
+
+  **The login form, reported 25 Aug 2026:** username and password on **one
+  page**, a "Remember me" checkbox, a Sign in button. Not email-first like
+  Epic's, which is what broke the assisted sign-in - see "Sign in for me" under
+  the sign-in window. Steam wants the *account name*, not an address, so the
+  stored "email" is the account name for this store.
 
   **Built (`adapters/steam.py`), scoped to free-to-keep only:** a normally-paid
   game temporarily 100 % off that stays in the library. Not free-to-play, not

@@ -183,7 +183,7 @@ function AddAccountDialog({
       open={open}
       onClose={onClose}
       title="Add an account"
-      subtitle="Pick the store, give the account a name you will recognise."
+      subtitle="Name the account so you will recognise it, then pick its store."
       size="small"
       footer={
         <>
@@ -204,10 +204,32 @@ function AddAccountDialog({
     >
       <div className="flex flex-col gap-4">
         {/*
+         * The name comes first. It is the only thing on this form the person
+         * has to compose rather than pick, and with five stores the card list
+         * below is tall enough that a name field under it reads as an
+         * afterthought - or is scrolled off altogether. First also means the
+         * dialog's own "focus the first control" lands in it, so the form
+         * opens ready to type.
+         */}
+        <Field
+          label="Name"
+          hint="Only for you. Two accounts on the same store need telling apart."
+          error={error}
+        >
+          <input
+            className="field"
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="Main Epic account"
+            maxLength={120}
+          />
+        </Field>
+
+        {/*
          * Cards rather than a dropdown, because each store carries a sentence
-         * about what it needs and a dropdown has nowhere to put one. With a
-         * single adapter this is one card; it is written as a grid so the
-         * second adapter needs no layout change.
+         * about what it needs and a dropdown has nowhere to put one. Written
+         * as a grid from the start, which is why going from one adapter to
+         * five needed no layout change here.
          */}
         <fieldset>
           <legend className="mb-1 text-control text-fg">Store</legend>
@@ -241,20 +263,6 @@ function AddAccountDialog({
             ))}
           </div>
         </fieldset>
-
-        <Field
-          label="Name"
-          hint="Only for you. Two accounts on the same store need telling apart."
-          error={error}
-        >
-          <input
-            className="field"
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder="Main Epic account"
-            maxLength={120}
-          />
-        </Field>
 
         {chosen && chosen.requirements.length > 0 && (
           <div className="well p-3">

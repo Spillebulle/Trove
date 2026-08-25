@@ -51,6 +51,8 @@ from .base import (
     ClaimResult,
     FreeOffer,
     Requirement,
+    SignInForm,
+    SignInStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -352,6 +354,31 @@ class EpicAdapter(BaseAdapter):
     # own "Sign In" lands; going straight there is what the assisted sign-in
     # needs, and it saves a person a click.
     signin_url = "https://www.epicgames.com/id/login"
+    # Measured, from the capture in the smoke workflow: Epic's login page is
+    # email-first. One field and a Continue button; the password field does
+    # not exist until Continue has been pressed, which is why the wait after
+    # the Enter is seconds rather than milliseconds. The email field is
+    # autofocused, so the sequence can start typing without clicking.
+    sign_in_forms = [
+        SignInForm(
+            key="full",
+            label="Email and password",
+            description=(
+                "One email field and a Continue button. Epic autofocuses it, "
+                "so there is nothing to click first."
+            ),
+            steps=[
+                SignInStep("email", "Typing your email…"),
+                SignInStep("enter", "Continuing…", wait_ms=3000),
+                SignInStep("password", "Typing your password…"),
+                SignInStep("enter", "Signing in…", wait_ms=2500),
+            ],
+        ),
+    ]
+    sign_in_note = (
+        "Tick “Remember me” before you press this. Without it Epic signs you "
+        "in with a session cookie, which no profile can keep across a restart."
+    )
     blurb = (
         "Claims the weekly giveaway. Sign in once through the live view and "
         "Trove reuses that session; it never stores your password."

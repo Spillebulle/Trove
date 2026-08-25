@@ -137,6 +137,81 @@ class Requirement:
     required: bool = True
 
 
+# What `POST /accounts/{id}/type` knows how to put into the sign-in window.
+# The API declares this again as a Literal for its request body; this copy is
+# the adapters' own, so that base.py needs nothing from the HTTP layer.
+TYPEABLE = frozenset({"email", "password", "code", "enter", "tab"})
+
+
+@dataclass(frozen=True)
+class SignInStep:
+    """One step of the assisted sign-in, as the store's own form wants it.
+
+    The assisted sign-in types into a window with *nothing attached to it* -
+    that is the whole point of the un-driven window - so Trove cannot read the
+    page to find out what it is looking at. It types blind, waits a beat, and
+    types again. That makes the order of the steps a fact about the store's
+    login form, and a fact one store's form does not share with another's:
+    Epic asks for the email, takes a Continue, and only then shows a password
+    field, while Steam puts both on one page where an Enter after the username
+    submits the form with no password in it.
+
+    So the steps are declared per adapter, in a `SignInForm`, rather than
+    written once against whichever store happened to be built first.
+
+    `action` is one of the things `POST /accounts/{id}/type` can type -
+    `email`, `password`, `code`, `enter`, `tab` - `label` is the sentence the
+    screen shows while it happens, and `wait_ms` is how long to wait after it
+    before the next step. The waits are the only thing standing in for reading
+    the page, so a step that navigates needs a generous one.
+    """
+
+    action: str
+    label: str
+    wait_ms: int = 400
+
+    def __post_init__(self) -> None:
+        # A misspelled action would not fail here but at the far end, as a 422
+        # from the type endpoint in the middle of a half-typed login form -
+        # which is the failure this whole change exists to prevent. Fail at
+        # import instead, where it is a typo and not an account.
+        if self.action not in TYPEABLE:
+            raise ValueError(
+                f"{self.action!r} is not something Trove can type; "
+                f"expected one of {', '.join(sorted(TYPEABLE))}"
+            )
+
+
+@dataclass(frozen=True)
+class SignInForm:
+    """One shape a store's login form can take, and the steps it wants.
+
+    A store does not have *one* form. GOG shows an email field and a password
+    field to somebody it has never seen, and to somebody it remembers it shows
+    the account's name, one password field and a "Change account" link -
+    measured, 25 Aug 2026, both screenshotted. Typing the first form's steps
+    into the second puts the email address in the password box.
+
+    Trove cannot tell which one is on the screen. That is not a gap to close:
+    the window has nothing attached to it, which is the entire reason the
+    store's captcha trusts it, and attaching something to read the page would
+    trade the working sign-in for a detection. **The person is looking at the
+    form.** So each shape is a button, and they press the one they can see -
+    the same division of labour as everywhere else here, where the automation
+    stops at the thing only a human can do and does not guess at it.
+
+    `label` names the shape on the button, `description` says what to look for
+    (and what to click first, since Trove types wherever focus already is), and
+    `steps` is the sequence. A store with one shape declares one form and the
+    interface shows a single "Sign in for me".
+    """
+
+    key: str
+    label: str
+    description: str
+    steps: list[SignInStep]
+
+
 class BaseAdapter(ABC):
     """One store.
 
@@ -158,6 +233,28 @@ class BaseAdapter(ABC):
     # who pressed "Sign in here" wants the login form, not the shop - and the
     # assisted sign-in has to start there. Falls back to `login_url`.
     signin_url: str = ""
+
+    # The shapes this store's login form comes in, for the "Sign in for me"
+    # button - one entry per shape, in the order the interface offers them.
+    # **Empty by default, and empty means the button is not offered at all** -
+    # only the one-at-a-time Email / Password / Code buttons, which need no
+    # knowledge of the form because the person clicks the field first.
+    #
+    # That default is the honest one. A form is a claim about a page nobody
+    # can see while it runs, and a wrong one does not fail harmlessly: typing
+    # an Enter into a half-filled form is a failed login attempt, and failed
+    # login attempts are what get an account rate-limited or locked - the
+    # exact outcome this app is built to avoid. So fill this in only from a
+    # form somebody has actually looked at, and say in the comment which it
+    # was.
+    sign_in_forms: list[SignInForm] = []
+    # Anything true of this store whichever shape is on the screen, said in
+    # one sentence and shown before the sign-in rather than in a tooltip. A
+    # checkbox is the usual case: the steps type and press keys, so they
+    # cannot tick "Remember me" - and on most stores an unticked "Remember me"
+    # is a session cookie that no profile can keep. Per-shape guidance goes on
+    # the form's own `description` instead.
+    sign_in_note: str = ""
 
     # Whether this store's offers can only be read by a signed-in session.
     # `False` for every store with a public feed, and that is the shape to

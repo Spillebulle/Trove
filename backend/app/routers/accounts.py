@@ -410,11 +410,19 @@ async def check_account_session(
 
 
 @router.get("/{account_id}/can-sign-in-here")
-def can_sign_in_here(account_id: int) -> dict:
+def can_sign_in_here(account_id: int, db: Session = Depends(get_db)) -> dict:
     """Whether a normal browser window is possible here, and why not if it is not.
 
     Lets the interface disable the button with a sentence rather than offering
     something that cannot work: a control that lies is worse than none.
+
+    It also carries this store's assisted-sign-in forms, because that is the
+    same kind of answer: the shape of a login form is a fact about the store,
+    and the button that types into it must not be offered where nobody has
+    checked what the form looks like. An empty list hides the button rather
+    than typing Epic's order into somebody else's form, and more than one
+    entry means the store has more than one shape - GOG asks a remembered
+    account for the password alone - so the person picks the one on screen.
     """
     # Two ways it can be possible, and the interface needs to know which:
     # "desktop" means a window opens on the screen in front of the person;
@@ -448,7 +456,33 @@ def can_sign_in_here(account_id: int) -> dict:
                 "view."
             ),
         }
-    return {"ok": True, "via": via, "reason": None}
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if account is None:
+        raise HTTPException(404, "No such account.")
+    adapter = ADAPTER_MAP.get(account.store)
+    forms = list(getattr(adapter, "sign_in_forms", []) or []) if adapter else []
+
+    return {
+        "ok": True,
+        "via": via,
+        "reason": None,
+        # One entry per shape this store's login form comes in. More than one
+        # means the interface offers a button each and the person presses the
+        # one on the screen, because the un-driven window cannot be read.
+        "sign_in_forms": [
+            {
+                "key": form.key,
+                "label": form.label,
+                "description": form.description,
+                "steps": [
+                    {"action": step.action, "label": step.label, "wait_ms": step.wait_ms}
+                    for step in form.steps
+                ],
+            }
+            for form in forms
+        ],
+        "sign_in_note": (getattr(adapter, "sign_in_note", "") if adapter else "") or None,
+    }
 
 
 @router.post("/{account_id}/type", status_code=204)

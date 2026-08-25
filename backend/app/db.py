@@ -125,6 +125,38 @@ def _migrate(engine) -> None:
                             )
                         )
 
+        # A ledger row copies the poster off the offer when it is written
+        # (`runner._record`), so that the row still looks like itself after the
+        # offer is pruned. Rows written before 0.1.21 were written before the
+        # column existed, and adding a column fills it with NULL - so a game
+        # claimed back then shows an empty art block on the account page and
+        # the ledger while the very same game still shows its poster under
+        # "Free now", which reads as a picture that failed to load rather than
+        # as a picture that was never stored.
+        #
+        # Outside the `if name not in existing` above on purpose: by the time
+        # this shipped those databases already *had* the column, so a backfill
+        # hung off the column being added would never run for the people who
+        # need it. It is idempotent and cheap - only NULLs, only where the
+        # offer row is still there with a poster on it - so running it every
+        # startup costs nothing and needs no version stamp to remember.
+        filled = conn.execute(
+            text(
+                "UPDATE claims SET image_url = ("
+                "  SELECT o.image_url FROM offers o WHERE o.id = claims.offer_id"
+                ") "
+                "WHERE image_url IS NULL AND offer_id IS NOT NULL AND EXISTS ("
+                "  SELECT 1 FROM offers o WHERE o.id = claims.offer_id "
+                "  AND o.image_url IS NOT NULL"
+                ")"
+            )
+        ).rowcount
+        if filled:
+            logger.warning(
+                "claims: filled in the poster on %d row(s) from their offers.",
+                filled,
+            )
+
 
 def get_db():
     db: Session = SessionLocal()

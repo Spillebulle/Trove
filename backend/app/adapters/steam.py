@@ -83,6 +83,8 @@ from .base import (
     ClaimResult,
     FreeOffer,
     Requirement,
+    SignInForm,
+    SignInStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,6 +268,37 @@ class SteamAdapter(BaseAdapter):
     # The login form directly: it is where a new account starts, and a
     # signed-in visit to it just bounces to the store front.
     login_url = f"{STORE_ROOT}/login/"
+    # Reported from the real form, 25 Aug 2026: Steam puts the username and
+    # the password on **one page**, with a "Remember me" checkbox and a Sign
+    # in button under them. So the step between the two fields is a Tab, not
+    # an Enter - an Enter there submits the form with an empty password, which
+    # is a failed login attempt, and Steam counts those.
+    #
+    # It is `email` that types into the username field: the action names what
+    # Trove has stored, not what the store calls its field. Steam wants the
+    # account name rather than an address, so store the account name there.
+    sign_in_forms = [
+        SignInForm(
+            key="full",
+            label="Username and password",
+            description=(
+                "The two fields with “Remember me” under them. Click the "
+                "username field first."
+            ),
+            steps=[
+                SignInStep("email", "Typing your username…"),
+                SignInStep("tab", "Moving to the password…", wait_ms=300),
+                SignInStep("password", "Typing your password…"),
+                SignInStep("enter", "Signing in…", wait_ms=2500),
+            ],
+        ),
+    ]
+    sign_in_note = (
+        "Click the username field first, and tick “Remember me”, before you "
+        "press this. Store your Steam *account name* as the email - Steam does "
+        "not take an address. Steam Guard will still ask for a code, which the "
+        "Code button types."
+    )
     blurb = (
         "Claims Steam's occasional “free to keep” promotions - a paid game "
         "temporarily 100% off that stays in your library. They are rare and "
@@ -294,7 +327,7 @@ class SteamAdapter(BaseAdapter):
         Two stages, both against store.steampowered.com and nothing else:
         the search narrows 60-odd-thousand free *to play* items down to the
         handful whose running discount makes them free, and `appdetails` then
-        positively confirms each one (`discount_percent == 100, final == 0`)
+        positively confirms each one (`discount_percent == 100`, measured)
         before it is offered to a run. Anything that cannot be confirmed is
         skipped with a log line rather than claimed - a free weekend keeps
         its real price in `price_overview` and falls out here.
@@ -380,15 +413,36 @@ class SteamAdapter(BaseAdapter):
     ) -> dict | None:
         """appdetails' verdict: the app's data if it is free to keep, else None.
 
-        Measured shapes (24 Aug 2026): a paid discounted game answers
-        `is_free: False` with a `price_overview` carrying `discount_percent`
-        and `final`; a free-to-play game answers `is_free: True` with no
-        `price_overview`. Free-to-keep is a *priced* game whose running
-        discount is the whole price: `discount_percent == 100 and final == 0`.
-        A free weekend fails this - its `price_overview` keeps the real price,
-        because the weekend is playtime, not a discount. A free-to-play game
-        fails it too (no `price_overview`). Anything unreadable fails it,
-        which is the conservative direction: skipped, never claimed.
+        Measured shapes: a paid discounted game answers `is_free: False` with
+        a `price_overview` carrying `discount_percent` and `final`; a
+        free-to-play game answers `is_free: True` with **no** `price_overview`
+        at all.
+
+        **And a live 100 %-off promotion, measured 25 Aug 2026 on Dokimon
+        Quest (2019300), answers this** - which is not what this function was
+        first written against:
+
+            {"initial": 1499, "final": 1499, "discount_percent": 100,
+             "initial_formatted": "$14.99", "final_formatted": "Free"}
+
+        `final` is the **undiscounted** price, not zero. The original rule was
+        `discount_percent == 100 and final == 0`, reasoned from a partially
+        discounted game (`discount_percent: 38, final: 495`) where `final` is
+        indeed what you pay - and it was flagged unverified for exactly this
+        reason. Against the real thing it rejected every free-to-keep game
+        there was, silently, so Steam reported "nothing is free" through a
+        promotion. Now measured, and the rule is the discount alone.
+
+        That still separates it from everything it must be separated from. A
+        free weekend is playtime rather than price, so its `price_overview`
+        keeps its real price and a `discount_percent` that is not 100. A
+        free-to-play game has no `price_overview` to read, so `.get` yields
+        `{}` and the test fails. `final_formatted` is checked as well when it
+        is there - Steam writes "Free" in it - but it is not required, because
+        it is a localised string and the discount is the fact.
+
+        Anything unreadable fails, which is the conservative direction:
+        skipped, never claimed.
         """
         try:
             response = await client.get(
@@ -404,8 +458,19 @@ class SteamAdapter(BaseAdapter):
             return None
         data = entry.get("data") or {}
         price = data.get("price_overview") or {}
-        if price.get("discount_percent") == 100 and price.get("final") == 0:
+        if price.get("discount_percent") != 100:
+            return None
+        # Belt and braces where Steam offers it, and never a veto on its own:
+        # `final == 0` is how some entries write it and `final_formatted` says
+        # "Free" in others, so either confirms and neither is required.
+        formatted = str(price.get("final_formatted") or "").strip().lower()
+        if price.get("final") == 0 or "free" in formatted or not formatted:
             return data
+        logger.info(
+            "Steam: %s is at -100%% but its price still reads %r; skipped.",
+            appid,
+            price.get("final_formatted"),
+        )
         return None
 
     async def _discount_expirations(self, client: httpx.AsyncClient) -> dict[int, int]:

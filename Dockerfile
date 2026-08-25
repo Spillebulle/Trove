@@ -84,14 +84,22 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN playwright install --with-deps chrome \
     && rm -rf /var/lib/apt/lists/*
 
-# Chrome's own way of not showing the "--no-sandbox" infobar: an enterprise
-# policy. It is a bar across the top of the screen view on every container
-# where the sandbox probe had to fall back, the page cannot see the flag either
-# way, and `--test-type` (the other way to hide it) is an automation flag this
-# window must not carry. The policy only changes Chrome's own chrome.
-RUN mkdir -p /etc/opt/chrome/policies/managed \
-    && echo '{ "CommandLineFlagSecurityWarningsEnabled": false }' \
-       > /etc/opt/chrome/policies/managed/trove.json
+# Chrome's own chrome, turned off by enterprise policy. A policy is the right
+# tool for all of this: it applies to **both** browsers - the driven one and
+# the un-driven sign-in window, which gets almost no flags on purpose - it
+# needs no command line, and **a page cannot see any of it**. These change what
+# Chrome draws over the page, not what the page is told about itself, so none
+# of it is a forged signal; `--test-type`, the other way to reach some of it,
+# is an automation flag this window must not carry.
+#
+# Why each one, and it is one file so the list is readable: the sign-in window
+# exists for a person to type a password into, on a screen they watch through
+# VNC, where there is no window manager and a bubble cannot be dragged aside.
+# The save-password bubble lands the instant a sign-in succeeds - on top of
+# whatever comes next, which on these stores is usually the 2FA prompt - and
+# the breach dialog is modal and eats the click meant for the page under it.
+# See docker/chrome-policy.json.
+COPY docker/chrome-policy.json /etc/opt/chrome/policies/managed/trove.json
 
 # The base image ships browsers for the `pwuser` it creates. Trove runs as that
 # user so it can read them, and the entrypoint remaps its ids to PUID/PGID at

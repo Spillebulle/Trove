@@ -330,6 +330,16 @@ class PrimeAdapter(BaseAdapter):
     # front and the person presses its own "Sign in" - which routes through
     # amazon.com's login and back.
     signin_url = HOME_URL
+    # No `sign_in_sequence` on purpose: nobody has looked at Amazon's login
+    # form, and a sequence guessed from memory would type an Enter into a
+    # half-filled form - a failed login attempt, on the one account this app
+    # must not get locked. So "Sign in for me" is not offered here; the
+    # Email / Password / Code buttons still work, because the person clicks
+    # the field first and Trove only types.
+    #
+    # To fill it in: open the sign-in window, look at the form, and write down
+    # whether the fields share a page (Tab between them) or the store asks for
+    # the name first and the password on a second step (Enter, then a wait).
     blurb = (
         "Claims the monthly keep-forever games. Needs an active Amazon Prime "
         "subscription. Amazon's login is the most bot-hostile of the set: sign "

@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CornerDownLeft, ExternalLink, Eye, KeyRound, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type SignInForm } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import {
   ACCOUNT_STATUS_LABEL,
@@ -227,24 +227,30 @@ export function AccountDetail() {
   // Email / Password / Code buttons do the same thing one at a time.
   const [assisting, setAssisting] = useState(false)
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-  const assistedSignIn = async () => {
+  // The steps come from the adapter, because the order is a fact about the
+  // store's form and not about this page: Epic asks for the email, takes a
+  // Continue and only then shows a password field, while Steam has both on one
+  // page where that same Enter would submit an empty password - a failed login
+  // attempt on the one account this app must not get locked. An empty list
+  // means nobody has looked at that store's form, and then the button is not
+  // rendered at all.
+  //
+  // A store can have more than one shape: GOG shows a remembered account one
+  // password field, and typing the first-time steps into that puts the email
+  // address in the password box. Trove cannot tell them apart - the window has
+  // nothing attached to it, which is the whole reason it works - so each shape
+  // is a button and the person presses the one on the screen.
+  const signInForms = localSignIn.data?.sign_in_forms ?? []
+  const assistedSignIn = async (form: SignInForm) => {
     setAssisting(true)
     try {
-      setSignInStep('Typing your email…')
-      await api.accounts.typeIntoScreen(accountId, 'email')
-      await sleep(400)
-      setSignInStep('Continuing…')
-      await api.accounts.typeIntoScreen(accountId, 'enter')
-      setSignInStep('Waiting for the password step to load…')
-      await sleep(3000)
-      setSignInStep('Typing your password…')
-      await api.accounts.typeIntoScreen(accountId, 'password')
-      await sleep(400)
-      setSignInStep('Signing in…')
-      await api.accounts.typeIntoScreen(accountId, 'enter')
-      await sleep(2500)
+      for (const step of form.steps) {
+        setSignInStep(step.label)
+        await api.accounts.typeIntoScreen(accountId, step.action)
+        await sleep(step.wait_ms)
+      }
       setSignInStep(
-        'If Epic asks you to verify — a captcha, or a two-factor code — do that on the screen now. For a code, press Code. Then press Done.',
+        'If the store asks you to verify — a captcha, or a two-factor code — do that on the screen now. For a code, press Code. Then press Done.',
       )
     } catch (error) {
       setSignInStep(null)
@@ -952,7 +958,12 @@ export function AccountDetail() {
         subtitle={
           finishing
             ? 'The checkout, in a normal browser window with nothing attached to it — the one Epic’s captcha accepts. Add the game to your library and answer the captcha. When the order goes through Epic closes its own window and the screen goes black: that is the finish, and Trove takes it from there.'
-            : 'A normal browser window, opened inside the container with nothing attached to it.'
+            : // The store's own caveat rides here rather than in a tooltip: on
+              // most stores an unticked "Remember me" is a session cookie no
+              // profile can keep, so it has to be read before the sign-in and
+              // not discovered after it.
+              'A normal browser window, opened inside the container with nothing attached to it.' +
+              (localSignIn.data?.sign_in_note ? ' ' + localSignIn.data.sign_in_note : '')
         }
         size="large"
       >
@@ -972,18 +983,26 @@ export function AccountDetail() {
                       Enter, with the captcha left to the person. Best-effort,
                       because the window has nothing attached for Trove to read;
                       the single buttons beside it are the reliable fallback. */}
-                  {screenInfo.data?.typing && data.login_email && data.has_login_password && (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={assisting}
-                      title="Type your email and password into the login form and press Enter between them. You still answer the captcha."
-                      onClick={() => void assistedSignIn()}
-                    >
-                      {assisting ? <Spinner /> : <KeyRound className="size-icon" />}
-                      Sign in for me
-                    </button>
-                  )}
+                  {screenInfo.data?.typing &&
+                    data.login_email &&
+                    data.has_login_password &&
+                    signInForms.map((form, index) => (
+                      <button
+                        key={form.key}
+                        type="button"
+                        className="btn-secondary"
+                        disabled={assisting}
+                        title={form.description}
+                        onClick={() => void assistedSignIn(form)}
+                      >
+                        {assisting && <Spinner />}
+                        {!assisting && index === 0 && <KeyRound className="size-icon" />}
+                        {/* One shape, one button, and it can say the plain
+                            thing. Several shapes and each says which form it
+                            fills in, because that is the choice being made. */}
+                        {signInForms.length === 1 ? 'Sign in for me' : form.label}
+                      </button>
+                    ))}
                   {/* The password-manager half: click a field on the screen,
                       press the button, Trove types it there. Enter is the
                       one key worth a button, so the hands can stay on this

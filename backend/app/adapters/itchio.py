@@ -63,6 +63,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from urllib.parse import urljoin
 
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
@@ -74,6 +75,8 @@ from .base import (
     ClaimResult,
     FreeOffer,
     Requirement,
+    SignInForm,
+    SignInStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,6 +224,31 @@ class ItchAdapter(BaseAdapter):
     display_name = "itch.io"
     login_url = f"{STORE_ROOT}/login"
     signin_url = f"{STORE_ROOT}/login"
+    # Seen on the real form, 25 Aug 2026 (screenshot): one page, "Username or
+    # email" then "Password" then a Log in button - so a Tab between the
+    # fields, never an Enter, which would post the form with no password in
+    # it. There is no "Remember me" checkbox on this form to miss.
+    sign_in_forms = [
+        SignInForm(
+            key="full",
+            label="Username and password",
+            description=(
+                "The two fields under “Log in to your itch.io account”. Click "
+                "the “Username or email” field first."
+            ),
+            steps=[
+                SignInStep("email", "Typing your username…"),
+                SignInStep("tab", "Moving to the password…", wait_ms=300),
+                SignInStep("password", "Typing your password…"),
+                SignInStep("enter", "Logging in…", wait_ms=2500),
+            ],
+        ),
+    ]
+    sign_in_note = (
+        "Click the “Username or email” field before you press this - Trove "
+        "types where the window's focus already is, and cannot see where that "
+        "is. Either your itch.io username or your address works in that field."
+    )
     blurb = (
         "Claims games whose itch.io sale is 100% off, so they stay in your "
         "library after the sale ends. Plainly: automated claiming may be "
@@ -266,6 +294,21 @@ class ItchAdapter(BaseAdapter):
             content = payload.get("content") or ""
 
             parsed = _parse_listing(content)
+            if content and not parsed:
+                # The listing answered with markup and nothing came out of it.
+                # That is the shape of a parser broken by a markup change, and
+                # it is indistinguishable from "nothing is free" unless it is
+                # said out loud - which is exactly how a bad cell pattern hid
+                # eleven free games behind a cheerful empty list until somebody
+                # noticed the page was not empty. `_CELL_SPLIT` and the two
+                # filters in `_parse_listing` are what to look at.
+                logger.error(
+                    "itch.io: the on-sale listing returned %d bytes of markup "
+                    "and no game cell parsed out of it. The markup has "
+                    "probably changed; discovery is reporting nothing free "
+                    "when the page is not empty.",
+                    len(content),
+                )
             dropped = len(parsed) - MAX_OFFERS
             if dropped > 0:
                 # The cap, out loud. CLAUDE.md's rule: never a silent cap.
@@ -478,15 +521,43 @@ class ItchAdapter(BaseAdapter):
                 ),
             )
 
-        logger.info("itch.io: opening the purchase form for %r.", offer.title)
+        # **Go to the purchase page rather than clicking the button**, which
+        # is the same lesson Epic taught: drive to the URL, do not fight the
+        # product page. The button is a plain `<a href=".../purchase">`, and
+        # clicking it is the fragile way to follow a link - measured on
+        # "Fear Assessment", whose page never stops reflowing while its art
+        # loads, so Playwright refused the click with *"element is not
+        # stable"* until it timed out. Its `/purchase` page answers 200 with
+        # the same pay-what-you-want form, at a stable position.
+        #
+        # The click stays as the fallback for a button with no href, which is
+        # what a JS-driven one would look like.
+        href = None
         try:
-            await buy.click(timeout=6000)
-        except PlaywrightTimeout:
-            raise NeedsAttention(
-                "The \"Download or claim\" button could not be clicked - "
-                "something is covering it.",
-                await self._shot(page, offer, "click-blocked"),
-            ) from None
+            href = await buy.get_attribute("href")
+        except Exception:
+            pass
+        if href:
+            logger.info(
+                "itch.io: going to the purchase page for %r.", offer.title
+            )
+            try:
+                await _goto(page, urljoin(offer.url or STORE_ROOT, href))
+            except PlaywrightTimeout:
+                raise NeedsAttention(
+                    "The itch.io purchase page did not load.",
+                    await self._shot(page, offer, "purchase-timeout"),
+                ) from None
+        else:
+            logger.info("itch.io: opening the purchase form for %r.", offer.title)
+            try:
+                await buy.click(timeout=6000)
+            except PlaywrightTimeout as exc:
+                raise NeedsAttention(
+                    "The \"Download or claim\" button could not be clicked: "
+                    f"{_why_blocked(exc)}.",
+                    await self._shot(page, offer, "click-blocked"),
+                ) from None
         await page.wait_for_timeout(1200)
         await self._guard(page, offer)
 
@@ -497,10 +568,10 @@ class ItchAdapter(BaseAdapter):
             logger.info("itch.io: taking the $0 path for %r.", offer.title)
             try:
                 await no_thanks.click(timeout=6000)
-            except PlaywrightTimeout:
+            except PlaywrightTimeout as exc:
                 raise NeedsAttention(
                     "The \"No thanks, just take me to the downloads\" link "
-                    "could not be clicked.",
+                    f"could not be clicked: {_why_blocked(exc)}.",
                     await self._shot(page, offer, "no-thanks-blocked"),
                 ) from None
             await page.wait_for_timeout(1500)
@@ -517,10 +588,9 @@ class ItchAdapter(BaseAdapter):
             try:
                 await control.click(timeout=6000)
                 clicked_claim = True
-            except PlaywrightTimeout:
+            except PlaywrightTimeout as exc:
                 raise NeedsAttention(
-                    "The claim control could not be clicked - something is "
-                    "covering it.",
+                    f"The claim control could not be clicked: {_why_blocked(exc)}.",
                     await self._shot(page, offer, "claim-blocked"),
                 ) from None
             await page.wait_for_timeout(1500)
@@ -585,7 +655,16 @@ class ItchAdapter(BaseAdapter):
 # href parses one response and returns nothing for the next, which presents as
 # discovery working "sometimes". So links are parsed as whole `<a>` tags and
 # the class and href are read out of the attribute string separately.
-_CELL_SPLIT = re.compile(r'(?=<div data-game_id=")')
+# Split before each game cell. **Attribute-order independent**, and that is
+# not a nicety: the live grid renders `<div dir="auto" data-game_id="…"
+# class="game_cell …">`, so a pattern anchored on `<div data-game_id="` split
+# nothing, every cell was skipped, and itch.io reported "nothing is free" with
+# a 200 and 60 kB of games in its hand. It failed *silently*, which is the
+# worst way for a parser to be wrong - `_links` below was already written this
+# way for exactly this reason and the split was not.
+_CELL_SPLIT = re.compile(r'(?=<div[^>]*data-game_id=")')
+# What a chunk must look like to be a cell at all: the same test, anchored.
+_CELL_START = re.compile(r'<div[^>]*data-game_id="')
 _GAME_ID = re.compile(r'data-game_id="(\d+)"')
 _A_TAG = re.compile(r"<a\b([^>]*)>([^<]*)")
 _PRICE = re.compile(r'class="price_value"[^>]*>([^<]*)<')
@@ -614,6 +693,32 @@ def _links(cell: str) -> tuple[tuple[str, str] | None, str | None]:
     return title, sale
 
 
+
+def _why_blocked(exc: Exception) -> str:
+    """What Playwright actually objected to, as a sentence.
+
+    Every click failure used to be reported as "something is covering it",
+    which is one of several reasons and was the wrong one for the case that
+    found this: a game page whose layout never settles produced *"element is
+    not stable"*, and the message sent the reader looking for an overlay that
+    was not there. A diagnosis that names the wrong cause is worse than one
+    that says it does not know.
+    """
+    text = str(exc)
+    if "not stable" in text:
+        return (
+            "the page would not stop moving, so the click never landed - "
+            "itch.io game pages keep reflowing while their art loads"
+        )
+    if "intercepts pointer events" in text:
+        return "something is covering it"
+    if "not visible" in text:
+        return "it is not visible"
+    if "not enabled" in text:
+        return "it is disabled"
+    return "the click timed out and Playwright did not say why"
+
+
 def _parse_listing(content: str) -> list[dict]:
     """The -100% cells of the on-sale grid, in the listing's (newest) order.
 
@@ -626,8 +731,8 @@ def _parse_listing(content: str) -> list[dict]:
     entries: list[dict] = []
     seen: set[str] = set()
     for cell in _CELL_SPLIT.split(content):
-        if not cell.startswith('<div data-game_id="'):
-            continue
+        if not _CELL_START.match(cell):
+            continue  # the markup before the first cell
         tag = _SALE_TAG.search(cell)
         if not tag or tag.group(1).strip() != "-100%":
             continue

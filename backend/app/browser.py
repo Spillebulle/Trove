@@ -33,6 +33,7 @@ outcome than a missed free game.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -413,6 +414,147 @@ class NoLocalBrowser(RuntimeError):
     """There is no browser on this machine that a person could sign in with."""
 
 
+
+# What Chrome must not draw over the page. In the container these are set by
+# enterprise policy (docker/chrome-policy.json), which is the authoritative
+# way and covers both browsers; a desktop has no policy directory Trove may
+# write to - a machine-wide policy is not this app's to install - so the same
+# settings go into the profile's own preferences instead.
+QUIET_PREFS = {
+    # The "Save password?" bubble, and its auto-sign-in cousin.
+    "credentials_enable_service": False,
+    "credentials_enable_autosignin": False,
+    "profile": {
+        "password_manager_enabled": False,
+        # Block web notification prompts rather than asking. The prompt is a
+        # bubble across the top of the page and it takes the next click.
+        "default_content_setting_values": {"notifications": 2},
+    },
+    # The autofill dropdown, which opens over the field under it.
+    "autofill": {"profile_enabled": False, "credit_card_enabled": False},
+}
+
+
+def _merge(into: dict, updates: dict) -> bool:
+    """Deep-merge `updates` into `into`. True if anything actually changed."""
+    changed = False
+    for key, value in updates.items():
+        if isinstance(value, dict):
+            child = into.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                into[key] = child
+                changed = True
+            changed |= _merge(child, value)
+        elif into.get(key) != value:
+            into[key] = value
+            changed = True
+    return changed
+
+
+
+# The files Chrome makes when it takes a profile and removes when it lets go.
+# `SingletonLock` is a **symlink** to `<host>-<pid>` that points at nothing, so
+# it has to be tested with `lexists`: `Path.exists()` follows the link, finds
+# no target and answers False for a lock that is very much there.
+SINGLETONS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+# Chrome's exit is not instant even after the process is gone: the network
+# service flushes the cookie database on the way out, and the session a person
+# just created is in that flush.
+PROFILE_SETTLE_S = 2.0
+PROFILE_RELEASE_TIMEOUT_S = 30.0
+
+
+async def wait_for_profile_release(
+    profile_path: Path, timeout_s: float = PROFILE_RELEASE_TIMEOUT_S
+) -> bool:
+    """Wait until Chrome has let go of a profile directory, then a beat more.
+
+    Between a sign-in window closing and the session check opening the same
+    profile there is a handover, and it used to be a flat three-second sleep -
+    a guess at how long Chrome takes to finish. When the guess is short the
+    check opens the profile while the old Chrome is still writing its cookie
+    database, reads the cookies as they were *before* the sign-in, and reports
+    an account that just signed in as signed out. Signing in a second time then
+    "works", because by then the first Chrome has long finished: which is
+    exactly what a person sees, and exactly what makes it look like the first
+    sign-in did not take.
+
+    So wait for the thing itself. Chrome removes its singleton files when it
+    releases the directory; when they are gone it has let go, and
+    `PROFILE_SETTLE_S` after that covers the last writes landing.
+
+    Returns whether the profile was seen to be released. False means the wait
+    timed out - the caller carries on regardless, because a stale lock left by
+    a crashed Chrome must not block a sign-in check forever, and Chrome itself
+    treats a stale lock the same way.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        if not any(os.path.lexists(profile_path / name) for name in SINGLETONS):
+            await asyncio.sleep(PROFILE_SETTLE_S)
+            return True
+        await asyncio.sleep(0.5)
+    logger.warning(
+        "Chrome still holds %s after %.0f s (a stale lock, or a window that "
+        "did not exit). Carrying on; if the session check says signed out "
+        "here, that is why.",
+        profile_path.name,
+        timeout_s,
+    )
+    return False
+
+
+def quiet_profile(profile_path: Path) -> None:
+    """Turn off Chrome's own pop-ups in this profile, before it is launched.
+
+    The bubbles matter more here than in an ordinary browser. The sign-in
+    window is watched through VNC on a display with **no window manager**, so a
+    bubble cannot be dragged aside; and the "Save password?" one appears the
+    instant a sign-in succeeds, which is exactly when the store is putting up
+    the next thing to click.
+
+    Only ever called while the account's lock is held and no Chrome has the
+    profile open, because Chrome rewrites this file as it exits and a
+    concurrent write would be lost or, worse, half-applied.
+
+    Failure here is never fatal and never retried. A profile is a signed-in
+    session that took a person and a captcha to make; losing one to a
+    preferences write would be a far worse outcome than a bubble. So anything
+    unexpected is logged and left exactly as it was found - including a
+    Preferences file that will not parse, which is Chrome's to repair.
+    """
+    prefs_path = profile_path / "Default" / "Preferences"
+    try:
+        if prefs_path.exists():
+            prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+            if not isinstance(prefs, dict):
+                logger.warning("%s is not a JSON object; left alone.", prefs_path)
+                return
+        else:
+            # A profile Chrome has never opened. Writing the file first is
+            # fine - Chrome merges its own defaults on top of what it finds.
+            prefs = {}
+        if not _merge(prefs, QUIET_PREFS):
+            return
+        prefs_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic: a half-written Preferences file is a profile Chrome will
+        # reset, and resetting it is losing the session.
+        temp = prefs_path.with_suffix(".trove-tmp")
+        temp.write_text(json.dumps(prefs), encoding="utf-8")
+        os.replace(temp, prefs_path)
+        logger.info("Quieted Chrome's pop-ups in %s.", profile_path.name)
+    except Exception as exc:
+        logger.warning(
+            "Could not quiet Chrome's pop-ups in %s (%s). Harmless: it only "
+            "means the browser may offer to save a password.",
+            profile_path.name,
+            exc,
+        )
+
+
 def launch_detached(profile_path: Path, url: str):
     """Open the account's profile in an ordinary browser window. No automation.
 
@@ -446,6 +588,7 @@ def launch_detached(profile_path: Path, url: str):
         )
     profile_path = profile_path.resolve()
     profile_path.mkdir(parents=True, exist_ok=True)
+    quiet_profile(profile_path)
     args = [
         str(executable),
         f"--user-data-dir={profile_path}",
@@ -586,6 +729,7 @@ class BrowserManager:
             # with a modal dialog that presents only as a launch timeout.
             profile_path = profile_path.resolve()
             profile_path.mkdir(parents=True, exist_ok=True)
+            quiet_profile(profile_path)
             channel = await resolve_channel(playwright, profile_path)
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_path),
@@ -748,10 +892,11 @@ class BrowserManager:
 
             if on_closed is not None:
                 # After the lock is released, because the callback wants the
-                # profile itself. Chrome takes a moment to let go of its files
-                # on Windows, and opening the profile too soon gets a lock error
-                # that reads as a failed sign-in rather than as a race.
-                await asyncio.sleep(3)
+                # profile itself - and after Chrome has actually let go of it,
+                # not after a fixed sleep. Opening it too soon reads the cookie
+                # database mid-flush, which reports the session the person just
+                # made as absent. See `wait_for_profile_release`.
+                await wait_for_profile_release(profile_path)
                 try:
                     await on_closed()
                 except Exception:

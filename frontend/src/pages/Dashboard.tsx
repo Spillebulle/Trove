@@ -24,7 +24,15 @@ import {
   relativeTime,
   timeLeft,
 } from '@/lib/utils'
-import { EmptyState, ErrorState, PageHeader, Panel, StatusBadge, Tile } from '@/components/ui'
+import {
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Panel,
+  StatusBadge,
+  StoreBadge,
+  Tile,
+} from '@/components/ui'
 
 export function Dashboard() {
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary, refetchInterval: 30_000 })
@@ -109,9 +117,19 @@ export function Dashboard() {
                       <span className="block truncate text-control text-strong">
                         {account.label}
                       </span>
-                      <span className="block truncate text-small text-dim">
-                        {account.status_reason ??
-                          'Open the live view and sign in to this store.'}
+                      {/* Which store this account is for. With five adapters
+                          a list of names alone does not say where a job is
+                          waiting, and the mark reads faster than a word. The
+                          mark alone: its tooltip and its screen-reader text
+                          carry the store's name, and the reason is what the
+                          width is for - the same row shape the offers page's
+                          "Coming up" list uses. */}
+                      <span className="mt-0.5 flex items-center gap-1.5 text-small text-dim">
+                        <StoreBadge store={account.store} />
+                        <span className="truncate">
+                          {account.status_reason ??
+                            'Open the live view and sign in to this store.'}
+                        </span>
                       </span>
                     </span>
                     <StatusBadge
