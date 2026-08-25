@@ -453,23 +453,62 @@ def _merge(into: dict, updates: dict) -> bool:
 
 
 
-# The files Chrome makes when it takes a profile and removes when it lets go.
-# `SingletonLock` is a **symlink** to `<host>-<pid>` that points at nothing, so
-# it has to be tested with `lexists`: `Path.exists()` follows the link, finds
-# no target and answers False for a lock that is very much there.
+# The files Chrome makes when it takes a profile. `SingletonLock` is a
+# **symlink** to `<host>-<pid>` that points at nothing, so it has to be tested
+# with `lexists`: `Path.exists()` follows the link, finds no target and answers
+# False for a lock that is very much there.
 SINGLETONS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 
 # Chrome's exit is not instant even after the process is gone: the network
 # service flushes the cookie database on the way out, and the session a person
 # just created is in that flush.
-PROFILE_SETTLE_S = 2.0
-PROFILE_RELEASE_TIMEOUT_S = 30.0
+PROFILE_SETTLE_S = 3.0
+PROFILE_RELEASE_TIMEOUT_S = 10.0
+
+
+def _lock_owner_alive(profile_path: Path) -> bool:
+    """Is a live process still holding this profile's singleton lock?
+
+    **A lock file is not evidence on its own.** Chrome removes these when it
+    shuts down through its own UI; it does *not* when it is terminated, which
+    is how Trove closes every window it opens. So a left-behind `SingletonLock`
+    is the normal state after a sign-in window closes, and treating its mere
+    presence as "still held" means waiting for something that will never
+    happen - measured in the container, where it stalled the post-sign-in check
+    by the full timeout after Chrome had already exited 0.
+
+    Chrome's own test is the one to copy: the lock is a symlink named
+    `<hostname>-<pid>`, and it is stale when that pid is gone. Anything that
+    cannot be read - no symlink, no pid in the name, a foreign hostname, or a
+    platform without `SingletonLock` at all - is treated as **not held**, which
+    is the direction that keeps a stale lock from blocking a sign-in forever.
+    """
+    lock = profile_path / "SingletonLock"
+    if not os.path.lexists(lock):
+        return False
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return False
+    _, _, pid_text = target.rpartition("-")
+    if not pid_text.isdigit():
+        return False
+    pid = int(pid_text)
+    try:
+        os.kill(pid, 0)  # signal 0: existence check, changes nothing
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # somebody else's process, so alive
+    except OSError:
+        return False
+    return True
 
 
 async def wait_for_profile_release(
     profile_path: Path, timeout_s: float = PROFILE_RELEASE_TIMEOUT_S
 ) -> bool:
-    """Wait until Chrome has let go of a profile directory, then a beat more.
+    """Wait until no live Chrome holds this profile, then a beat more.
 
     Between a sign-in window closing and the session check opening the same
     profile there is a handover, and it used to be a flat three-second sleep -
@@ -477,30 +516,28 @@ async def wait_for_profile_release(
     check opens the profile while the old Chrome is still writing its cookie
     database, reads the cookies as they were *before* the sign-in, and reports
     an account that just signed in as signed out. Signing in a second time then
-    "works", because by then the first Chrome has long finished: which is
-    exactly what a person sees, and exactly what makes it look like the first
-    sign-in did not take.
+    "works", because by then the first Chrome has finished.
 
-    So wait for the thing itself. Chrome removes its singleton files when it
-    releases the directory; when they are gone it has let go, and
-    `PROFILE_SETTLE_S` after that covers the last writes landing.
+    In the ordinary case the caller has already waited for the process to
+    exit, so `_lock_owner_alive` is false at once and this is `PROFILE_SETTLE_S`
+    - the part that covers the flush, which is the part that was too short.
+    The loop is for the case that is not ordinary: another Chrome, started by
+    hand or left from a crash, genuinely holding the directory.
 
-    Returns whether the profile was seen to be released. False means the wait
-    timed out - the caller carries on regardless, because a stale lock left by
-    a crashed Chrome must not block a sign-in check forever, and Chrome itself
-    treats a stale lock the same way.
+    Returns whether the profile was seen free. False means the timeout passed
+    with a live holder; the caller carries on regardless, because refusing to
+    check a session is worse than checking one a moment early.
     """
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_s
     while loop.time() < deadline:
-        if not any(os.path.lexists(profile_path / name) for name in SINGLETONS):
+        if not _lock_owner_alive(profile_path):
             await asyncio.sleep(PROFILE_SETTLE_S)
             return True
         await asyncio.sleep(0.5)
     logger.warning(
-        "Chrome still holds %s after %.0f s (a stale lock, or a window that "
-        "did not exit). Carrying on; if the session check says signed out "
-        "here, that is why.",
+        "A live Chrome still holds %s after %.0f s. Carrying on; if the "
+        "session check says signed out here, that is why.",
         profile_path.name,
         timeout_s,
     )

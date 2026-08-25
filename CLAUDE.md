@@ -532,13 +532,29 @@ cookie database on the way out, and the session the person just made is in that
 flush. Open the profile too early and the check reads the cookies as they were
 *before* the sign-in and reports a freshly signed-in account as signed out -
 and signing in again then "works", because by then the first Chrome has
-finished. `browser.wait_for_profile_release` waits for the thing itself: Chrome
-removes `SingletonLock`, `SingletonCookie` and `SingletonSocket` when it lets
-go of a directory. One trap - **`SingletonLock` is a symlink to `<host>-<pid>`
-that points at nothing**, so `Path.exists()` follows it, finds no target and
-answers False for a lock that is very much there; it takes `os.path.lexists`.
-A timeout carries on regardless, because a stale lock from a crashed Chrome
-must not block sign-in forever.
+finished. `browser.wait_for_profile_release` waits for that, and **the first version of
+it was wrong in a way worth recording**, because the wrong idea is the obvious
+one: it waited for `SingletonLock` to disappear, on the reasoning that Chrome
+removes it when it lets go. Chrome removes it when it shuts down *through its
+own UI*. It does **not** when it is terminated - which is how Trove closes
+every window it opens - so the file is always left behind and the wait always
+ran to its timeout. Measured in the container by the smoke workflow: Chrome
+exited 0, the lock was released, and the check that should have followed sat
+for the full timeout instead.
+
+So the test is Chrome's own: the lock is a symlink named `<hostname>-<pid>`,
+and it is **stale when that pid is gone** (`_lock_owner_alive`, `os.kill(pid,
+0)`). Anything unreadable - no symlink, no pid in the name, a platform with no
+`SingletonLock` - counts as not held, which is the direction that cannot block
+a sign-in forever. Two traps in eight lines: `Path.exists()` **follows** the
+symlink, finds no target and answers False for a lock that is very much there
+(it takes `os.path.lexists`), and `os.kill(pid, 0)` raises `PermissionError`
+for a process owned by somebody else, which means alive, not absent.
+
+In the ordinary case the caller has already waited for the process to exit, so
+this returns after `PROFILE_SETTLE_S` alone - the flush window, which is the
+part that was too short at three seconds. The loop is only for a Chrome
+somebody else started.
 
 **Typing into that window** is `keyboard.py`: `xdotool type --file -` through
 the X server (XTEST) into the focused window, which on that screen is the
