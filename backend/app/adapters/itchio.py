@@ -209,7 +209,14 @@ async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 150
     while True:
         for selector in selectors:
             try:
-                locator = page.locator(selector).first
+                # `visible=true` and not `.first`: a locator's first match is
+                # not necessarily a visible one. itch.io renders the sale
+                # widget twice - a `visibility: hidden` 0x0 copy for the
+                # narrow layout, then the real one - and taking `.first`
+                # found the hidden copy, answered "not visible" and reported a
+                # live 100% sale as ended. Ask Playwright for the first
+                # *visible* match, which is what this function is called.
+                locator = page.locator(f"{selector} >> visible=true").first
                 if await locator.is_visible():
                     return locator
             except Exception as exc:  # a malformed selector is a bug, not a state
@@ -505,20 +512,34 @@ class ItchAdapter(BaseAdapter):
                 await self._shot(page, offer, "no-buy-button"),
             )
 
-        # A button that does not mention claiming is a plain "Download": free,
-        # but with nothing to keep. Say so instead of pretending it was a claim.
+        # **The button's wording is not the verdict.** This used to bail out
+        # here whenever the label did not say "claim", on the reasoning that
+        # "Download now" means a free download with nothing to keep. Reported
+        # from a real run, 25 Aug 2026: "Cherophobia", "Very Realistic Game Dev
+        # Simulator" and "Do You Have a Moment to Talk About Our Lord and
+        # Savior?" all say **Download Now** on a live 100 % sale, and all three
+        # are claimable - the purchase page offers "No thanks, just take me to
+        # the downloads" and the claim is there behind it, exactly as for a
+        # button that says "Download or claim". itch.io words the button from
+        # whether the game has a free download at all, which is a different
+        # question from whether this sale can be claimed.
+        #
+        # So the label is now logged and nothing more. The verdict comes from
+        # the flow: if the purchase page turns out to offer no claim control,
+        # the end of this function still answers `not_eligible` - and that is
+        # an answer read off the page that decides it, rather than guessed
+        # from a word on the one before.
         label = ""
         try:
             label = " ".join((await buy.inner_text() or "").split()).lower()
         except Exception:
             pass
-        if label and "claim" not in label:
-            return ClaimResult(
-                outcome="not_eligible",
-                detail=(
-                    f"itch.io offers only “{label}” here, not a claim - "
-                    "the game would not stay in the library, so it was left alone."
-                ),
+        if label:
+            logger.info(
+                "itch.io: the button for %r says %r; going through the "
+                "purchase page to find out whether it can be claimed.",
+                offer.title,
+                label,
             )
 
         # **Go to the purchase page rather than clicking the button**, which
@@ -561,9 +582,21 @@ class ItchAdapter(BaseAdapter):
         await page.wait_for_timeout(1200)
         await self._guard(page, offer)
 
+        # **Look for the claim before taking the link that skips past it.**
+        # "No thanks, just take me to the downloads" says what it does: it goes
+        # to the files. Where itch.io puts the claim control on the purchase
+        # page itself, clicking that link first would walk past the very thing
+        # this run is here for and then report "no claim control" from the
+        # download page - a claim quietly not made, which is worse than a
+        # failure because it looks like an answer. So the purchase page is
+        # asked first, briefly, and the $0 link is the fallback.
+        control = await _first_visible(page, CLAIM_CONTROL, timeout_ms=2500)
+
         # The pay-what-you-want form. The measured wording of the free path;
         # this is the only thing on the form that is ever clicked.
-        no_thanks = await _first_visible(page, NO_THANKS, timeout_ms=6000)
+        no_thanks = None if control is not None else await _first_visible(
+            page, NO_THANKS, timeout_ms=6000
+        )
         if no_thanks is not None:
             logger.info("itch.io: taking the $0 path for %r.", offer.title)
             try:
@@ -581,7 +614,8 @@ class ItchAdapter(BaseAdapter):
         # flow; not finding it is an answer (browser/download-only, nothing to
         # keep), not a fault - but the answer is checked against ownership
         # first, because the claim may also have happened along the way.
-        control = await _first_visible(page, CLAIM_CONTROL, timeout_ms=5000)
+        if control is None:
+            control = await _first_visible(page, CLAIM_CONTROL, timeout_ms=5000)
         clicked_claim = False
         if control is not None:
             logger.info("itch.io: claiming %r.", offer.title)

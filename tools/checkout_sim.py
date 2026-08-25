@@ -71,6 +71,7 @@ async def _priority_check() -> bool:
             self.visible = visible
 
         def locator(self, sel):
+            sel = _bare(sel)
             return FakeLoc(sel, sel in self.visible)
 
     # The dialog-scoped "I accept" (first in ACCEPT) and a loose "Accept" (last)
@@ -89,6 +90,15 @@ async def _priority_check() -> bool:
         return False
     print("priority OK")
     return True
+
+
+# Playwright resolves `"<sel> >> visible=true"` to the visible matches of
+# `<sel>`, which is what the adapters' `_first_visible` now asks for - a
+# locator's *first* match is not necessarily a visible one. These fakes model
+# visibility with their own bookkeeping, so the suffix is stripped and the
+# answer is unchanged: same selector, same visibility rules.
+def _bare(sel):
+    return sel.split(" >> visible=true")[0]
 
 
 class FakePage:

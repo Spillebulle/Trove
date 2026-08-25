@@ -55,6 +55,15 @@ Base.metadata.create_all(engine)
 # ── Fakes for the runner half ───────────────────────────────────────────────
 
 
+# Playwright resolves `"<sel> >> visible=true"` to the visible matches of
+# `<sel>`, which is what the adapters' `_first_visible` now asks for - a
+# locator's *first* match is not necessarily a visible one. These fakes model
+# visibility with their own bookkeeping, so the suffix is stripped and the
+# answer is unchanged: same selector, same visibility rules.
+def _bare(sel):
+    return sel.split(" >> visible=true")[0]
+
+
 class FakePage:
     url = "https://luna.amazon.com/claims/home"
 
@@ -326,7 +335,7 @@ class FakeClaimPage:
         self.state = state
 
     def locator(self, sel):
-        return FakeCodeLoc(self.state, sel)
+        return FakeCodeLoc(self.state, _bare(sel))
 
     async def wait_for_timeout(self, ms):
         pass

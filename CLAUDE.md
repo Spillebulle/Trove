@@ -975,6 +975,47 @@ reasoning rather than observation, and it is invisible without looking.
 - **Prime's zero is by construction** (`discovery_needs_session`), and says
   nothing about whether it works.
 
+**`_first_visible` did not do what it is called, in every adapter** (found on
+itch.io, 25 Aug 2026, fixed in all five). It took `page.locator(sel).first` and
+asked whether *that* was visible - but a locator's first match is not
+necessarily a visible one. "Blank Relish" renders its sale widget **twice**:
+a `visibility: hidden`, 0x0 copy for the narrow layout, then the real one.
+`.first` found the hidden copy, answered "not visible", and the claim reported
+**"The page no longer shows a 100% sale, so nothing was clicked"** about a sale
+that was plainly running. Measured: `.sale_rate:has-text("100%")` with `.first`
+is False on that page and True on two others; with `>> visible=true` it is True
+on all three.
+
+The fix is to ask Playwright for the first *visible* match, which is the
+function's name and its docstring. **All five adapters carried the same line**
+- it is described in the source as "epic's shape" - so Epic's proven checkout
+had the same latent fault waiting for a page with a hidden duplicate. The two
+sims' fake pages learned the suffix rather than being loosened; `checkout_sim`
+still asserts selector priority and still prints `priority OK`.
+
+**The button's wording is not the verdict** (reported from a real run, same
+day). The claim bailed out with "itch.io offers only *download now* here, not a
+claim" whenever the label did not say "claim". Three games on live 100 % sales
+- "Cherophobia", "Very Realistic Game Dev Simulator", "Do You Have a Moment to
+Talk About Our Lord and Savior?" - say **Download Now** and are all claimable
+through the same purchase page. itch.io words that button from whether a free
+download exists at all, which is a different question from whether the sale can
+be claimed. The label is logged now and decides nothing; the verdict comes from
+the flow, and "no claim control on the page that would have one" is still an
+honest `not_eligible`.
+
+**And look for the claim before taking the link that skips past it.** "No
+thanks, just take me to the downloads" says exactly what it does. Where itch.io
+puts the claim control on the purchase page, clicking that link first would
+walk past the thing the run is there for and then report "no claim control"
+from the download page - a claim quietly not made, which is worse than a
+failure because it reads as an answer. The purchase page is asked first,
+briefly; the $0 link is the fallback. Verified signed out as far as it can be:
+`/purchase` -> "No thanks" -> a tokenised `/download/...` page, with no claim
+control, which is what a signed-out visitor should see. **The claim control
+itself is still unverified** - it needs an account, and that is the next
+measurement.
+
 **And the itch.io claim: "something is covering it" was the wrong diagnosis**
 (reported from a real run on "Fear Assessment", 25 Aug 2026). Every click
 failure in that adapter was reported as an overlay. Reproduced with

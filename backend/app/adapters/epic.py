@@ -336,7 +336,14 @@ async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 150
     while True:
         for selector in selectors:
             try:
-                locator = page.locator(selector).first
+                # `visible=true` and not `.first`: a locator's first match is
+                # not necessarily a visible one. itch.io renders the sale
+                # widget twice - a `visibility: hidden` 0x0 copy for the
+                # narrow layout, then the real one - and taking `.first`
+                # found the hidden copy, answered "not visible" and reported a
+                # live 100% sale as ended. Ask Playwright for the first
+                # *visible* match, which is what this function is called.
+                locator = page.locator(f"{selector} >> visible=true").first
                 if await locator.is_visible():
                     return locator
             except Exception as exc:  # a malformed selector is a bug, not a state
