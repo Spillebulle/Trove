@@ -164,7 +164,16 @@ export function Offers() {
               {freeNow.map((offer) => {
                 const ends = timeLeft(offer.ends_at)
                 return (
-                  <article key={offer.id} className="card overflow-hidden">
+                  <article
+                    key={offer.id}
+                    /* A column of full height, so the three lines at the foot
+                       sit on the card's floor rather than wherever the text
+                       above them happened to end. Grid items already stretch
+                       to the tallest card in the row; without this the cards
+                       are the same height but their footers are not aligned,
+                       which is what makes a tidy grid look ragged. */
+                    className="card flex h-full flex-col overflow-hidden"
+                  >
                     {/*
                      * The artwork is flush to the card's edge with the caption
                      * under it (7.15). Not an art card: an offer needs a claimed-by
@@ -177,7 +186,7 @@ export function Offers() {
                       className="block aspect-wide w-full rounded-b-none"
                     />
 
-                    <div className="p-strip">
+                    <div className="flex flex-1 flex-col p-strip">
                       <h2
                         className="truncate text-control font-semibold text-strong"
                         title={offer.title}
@@ -185,7 +194,7 @@ export function Offers() {
                         {offer.title}
                       </h2>
 
-                      <p className="mt-0.5 flex items-center gap-2 text-small text-dim">
+                      <p className="mt-0.5 flex min-w-0 items-center gap-2 text-small text-dim">
                         <StoreBadge store={offer.store} withName />
                         {/* An add-on is worth a badge rather than a word: it is the
                             one kind that may not be claimable on its own, and the
@@ -200,7 +209,10 @@ export function Offers() {
                         {ends ?? 'No end date given.'}
                       </p>
 
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {/* `mt-auto` is the floor: this row and the "seen" line
+                          under it are pushed down, and the slack lands above
+                          them instead of below. */}
+                      <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
                         {offer.claimed_by.length > 0 ? (
                           <span
                             className="badge-good"

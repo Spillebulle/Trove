@@ -123,7 +123,16 @@ export function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
  */
 export function KindBadge({ kind }: { kind: string }) {
   if (kind !== 'dlc' && kind !== 'key') return null
-  return <span className={BADGE_CLASS.neutral}>{kind === 'dlc' ? 'Add-on' : 'Key'}</span>
+  // `shrink-0` and no wrapping, wherever it lands. "Add-on" broke across two
+  // lines on a narrow offer card next to a long store name - which grew the
+  // row, pushed everything under it down, and made one card in a grid taller
+  // than its neighbours. A badge is a fixed label: it is the *name* beside it
+  // that should give up a character, and StoreBadge already truncates.
+  return (
+    <span className={cn(BADGE_CLASS.neutral, 'shrink-0 whitespace-nowrap')}>
+      {kind === 'dlc' ? 'Add-on' : 'Key'}
+    </span>
+  )
 }
 
 /**
