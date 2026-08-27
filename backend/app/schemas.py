@@ -177,6 +177,12 @@ class ClaimRead(Read):
     key_store: str | None
     screenshot: str | None
     created_at: datetime | None
+    # How many rows this one stands for. The ledger is still one row per
+    # attempt in the table - that is the record and it does not change - but
+    # the list collapses a game to its latest row, and a run that has said
+    # "not claimed yet" about the same DLC eight times should say so once and
+    # count. 1 means it is the only row there is.
+    attempts: int = 1
 
 
 class ClaimKey(BaseModel):

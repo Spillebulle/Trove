@@ -74,7 +74,13 @@ from datetime import datetime, timezone
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
-from ..browser import CheckoutBlocked, NeedsAttention, screenshot, screenshot_name
+from ..browser import (
+    CheckoutBlocked,
+    NeedsAttention,
+    StoreChallenged,
+    screenshot,
+    screenshot_name,
+)
 from .base import (
     BaseAdapter,
     ChallengeWaiter,
@@ -384,7 +390,12 @@ class GogAdapter(BaseAdapter):
             return False, "GOG did not load in time."
 
         if await _first_visible(page, CHALLENGE):
-            return False, "GOG is showing a challenge that needs a person."
+            raise StoreChallenged(
+                "GOG is showing a challenge that needs a person."
+                " This is the store judging Trove's own browser, not your"
+                " account, so the session behind it may be fine - Trove has"
+                " left it alone and will try again on the next run."
+            )
         if "openlogin" in (page.url or ""):
             return False, "This account is signed out. Sign in again with \"Sign in here\"."
         if await self._read_owned_ids(page) is not None:

@@ -293,6 +293,26 @@ class NeedsAttention(Exception):
         self.screenshot = screenshot
 
 
+class StoreChallenged(NeedsAttention):
+    """The store put an anti-bot challenge in front of the *driven* browser.
+
+    Distinct from a broken session, and it matters which one you are looking
+    at. A signed-out account fails the same way on every run until a person
+    signs in, so parking it (`needs_attention`, which the scheduler skips) is
+    right. A challenge is not that: Cloudflare judges the browser and the
+    address on the visit in front of it, so the session behind it may be
+    perfectly good and the very next run may sail through. Parking on one
+    would stop the schedule over a verdict that has already expired - and it
+    is what turned "Epic showed a challenge" into a loop of sign in, check,
+    challenge, sign in again.
+
+    So the runner records this, keeps the account where it was and lets the
+    ordinary cadence try again. One page load every few hours is polite by
+    any measure, and it is the only thing that can find out whether the
+    verdict has changed.
+    """
+
+
 class CheckoutBlocked(NeedsAttention):
     """The checkout hit a captcha the *driven* browser cannot pass.
 

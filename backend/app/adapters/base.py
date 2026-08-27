@@ -344,7 +344,16 @@ class BaseAdapter(ABC):
 
     @abstractmethod
     async def health(self, page: Page) -> tuple[bool, str]:
-        """Is the stored session still signed in? Returns (ok, a sentence)."""
+        """Is the stored session still signed in? Returns (ok, a sentence).
+
+        May raise `browser.StoreChallenged` instead, and should where the
+        store is plainly showing an anti-bot challenge rather than answering
+        the question. That is a third answer, not a `False`: a challenge says
+        the *browser* was refused, which the session behind it may have
+        nothing to do with, and the runner treats the two differently - a
+        signed-out account is parked for a person, a challenged one is left
+        alone and tried again on the ordinary cadence.
+        """
 
     @abstractmethod
     async def is_owned(self, page: Page, offer: FreeOffer) -> bool | None:

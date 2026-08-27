@@ -82,7 +82,7 @@ ACCOUNTS = [
     # store here would put one store's name over another store's page.
     dict(store="epic", label="Epic", status="needs_attention", days_ago=0.9,
          reason="Epic wants to verify it is you and has emailed a code. Sign in "
-                "here, type the code it sent you, and press Check again.",
+                "here and type the code it sent you.",
          screenshot="epic-verify.png"),
     dict(store="gog", label="GOG", status="ok", days_ago=0.6),
     dict(store="prime", label="Prime Gaming", status="never_signed_in", days_ago=None),

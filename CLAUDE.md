@@ -110,6 +110,45 @@ a status; it means selected, in hand, primary (§2.4).
 Read the checklist in §16 of the style guide before the first screen ships, and
 §17 before the README.
 
+**One primary action per screen, and the rest behind a menu (0.1.33).** The
+account page's header had grown to seven buttons - Finish the claim here, Sign
+in here, Show the screen, Live view, Watch, Run and watch, Run now - and the
+attention notice under it repeated three of them, so the same page offered
+"Sign in here" and "Open a browser window" as if they were different things.
+Seven buttons is not a rich interface; it is a page with no primary action,
+which is what it was reported as ("it's not clear what I am supposed to do
+here"). Now: one `btn-primary` chosen by what the account is actually doing,
+in an order of urgency - a captcha waiting, a window already open, a checkout
+to finish, a run to watch, a sign-in needed, otherwise Run now - and everything
+else in `ui.ActionMenu`, where each entry keeps its label and gains the line
+saying what it does that a crowded strip had no room for. Nothing was removed.
+The notice explains; the header acts.
+
+The same disease on the screen view's bar: seven controls in four shapes (a
+filled button, three bare words, a lone arrow glyph, a paragraph), with nothing
+saying that five of them were the same job. They are one bordered cluster under
+the label "Type into the window" now, every item an icon and a word, ordered as
+a login form is filled - the whole sequence, a rule, then the single keys - and
+the finishing button is primary and pushed to the far end.
+
+**`ScreenView` must not explain what it is showing.** Its bar carried a
+paragraph saying the browser on the other side "has nothing attached to it: no
+automation, no remote control, only you". True of the sign-in window; **false
+of a watched run**, which is the same component showing a browser Playwright is
+driving, and it said it in both. What a particular screen *is* belongs to the
+dialog that opened it, so it is said once, in the subtitle, by the caller that
+knows. The bar takes a render prop now (`footer(tools)`) so the page can lay
+out the whole thing and still reach the clipboard, which only the component
+holds.
+
+**A Tailwind class that does not exist is silently nothing.** `rounded-control`,
+`bg-raised` and `bg-sunk` were used in three places and are in no config: the
+scale is *replaced* rather than extended (radii are `tight/ctl/tool/card/modal/
+art`, and surfaces are `window/dock/chrome/popover/control`), so those three
+compiled to nothing at all and the boxes had no fill and square corners. Nothing
+warns. When a panel looks flat, check the class name against
+`tailwind.config.js` before adjusting anything else.
+
 Store marks in the interface are one component, `ui.StoreBadge`: simple-icons
 path data (CC0), inlined - this app is self-hosted and fetches nothing from a
 CDN - and monochrome through `currentColor`, never the brand colours, which
@@ -238,6 +277,63 @@ Two additions neither sibling has, both now built:
      held to `none`, and give a move `clickCount: 0`. A challenge that scores
      pointer behaviour is being shown a drag-then-click otherwise, which is the
      shape of a bot and not of a person.
+
+## A challenge is not a broken session (0.1.33)
+
+**Reported from a live install: Epic showed the driven browser Cloudflare's
+"One more step - please complete a security check to continue", and the account
+went round in a circle.** The run's health check saw the interstitial, filed the
+account `needs_attention`, and the scheduler then skipped it forever. The person
+did the only thing the page offered - sign in again, by hand, in the un-driven
+window, successfully - and the check that followed opened the *driven* browser,
+met the same interstitial and filed it again. Nothing they could do could clear
+it, because the session was never what was refused.
+
+Two mistakes, both fixed, and both worth stating as rules.
+
+1. **Not every "security check" wants a person, so wait before saying one
+   does.** `epic.health` read the page 1.5 s after it loaded and gave its
+   verdict on that. Cloudflare's *managed* challenge usually runs itself,
+   scores the browser and hands back to the store within a few seconds with
+   nothing on it to click. `epic._wait_out_challenge` now watches for up to
+   `CHALLENGE_SETTLE_S` (25 s) for either half of the store's own page to
+   appear or the challenge markers to go away, and logs where it started and
+   how long it took. It waits and looks; it never clicks, never types and
+   never answers anything - a challenge that wants a person still gets one, it
+   just has to prove it wants one by still being there at the end.
+
+2. **A challenge that stays is `browser.StoreChallenged`, and it does not park
+   the account.** This is exactly the 0.1.23 reasoning about a blocked
+   checkout, arrived at from the other end. `needs_attention` means "every run
+   will fail the same way until a person acts", which is true of a signed-out
+   account and false of a challenged one: Cloudflare judges the browser and the
+   address on the visit in front of it, so the next run may sail through - and
+   *only another visit* can discover that. So `run_account` records the run as
+   `attention` with the reason and the screenshot (`runner._note_status` writes
+   those without touching `status`), leaves the account where it was, and lets
+   the ordinary cadence carry on. One page load every few hours is polite by
+   any measure. The notification goes out once per spell rather than once per
+   run, because the second one says the same standing thing.
+
+   `scheduler._unpark_challenged` is the one-time recovery for accounts an
+   older build already parked, matched on the sentence those builds stored -
+   the same shape as `_unpark_blocked_checkouts`, and for the same reason.
+   `_check_health` also clears a stale reason off a healthy `ok` account now,
+   which nothing did before: a challenge writes only the reason, so without
+   that the page kept explaining a refusal that had since been sailed past.
+
+`health` may therefore raise as well as return, and `adapters/base.py` says so.
+GOG, itch.io and Prime raise it too - the classification is the same fact for
+every store - but **only Epic waits**, because only Epic's challenge has been
+seen here and inventing a wait loop for the other three would be writing
+against a page nobody has looked at.
+
+**What is not established:** whether the wait actually clears a real Epic
+interstitial. The reasoning is sound and the cost of being wrong is 25 seconds
+per challenged run, but nobody has yet watched one clear. The log line names
+the page title and URL it gave up on, which is the measurement to write the
+next version against. Fixing this the wrong way would be to start clicking
+things in the challenge, and that is the one thing this app does not do.
 
 ## The browser has to be real Chrome
 
@@ -794,6 +890,21 @@ Four concerns, kept thin, mirroring HomeLab's split. Where each one lives:
   table; the app never claims a game it cannot show a row for. `Claim.title` is
   **copied** off the offer rather than joined, so the ledger keeps reading
   properly after an old offer row is pruned.
+
+  **The table keeps every attempt; the page shows the latest one (0.1.33).**
+  Those are two different jobs and they had been the same query. An add-on
+  nobody can claim - a Steam DLC for a game the account does not own - writes
+  an honest `not_eligible` row on every run, three times a day, and the ledger
+  a person reads became a wall of identical lines with the week's actual claims
+  buried in it. `/api/claims` now folds to one row per game per account, newest
+  first, with `attempts` counting what it stands for; `every_attempt=true`
+  returns the unfolded list. The fold is done **in SQL** (`max(id)` per group,
+  grouped by offer id, or by title for a claim that never had an offer) rather
+  than over a page of results, because a page of 200 rows can be twenty games
+  and the client cannot fold away what it was never sent. Filters apply before
+  the fold, so "Claimed" shows the latest *claimed* row of each game rather
+  than hiding a game whose newest row is something else. `tools/ledger_fold_sim.py`
+  pins all of that against a throwaway database.
 
 The ledger is also the memory that stops a double claim: `runner._already_claimed`
 skips any offer this account already has a `claimed` or `already_owned` row for,
@@ -1367,8 +1478,20 @@ backend/.venv/Scripts/python tools/shots.py --no-build --offline   # quickest
 directory down silently ignores them and you get the "changeme" password and no
 CORS origin.
 
-`npm run lint` is `tsc --noEmit`. There is no test suite yet; when there is one,
-put how to run a single test here.
+`npm run lint` is `tsc --noEmit`. There is no test suite yet; what stands in for
+one is the `tools/*_sim.py` family, each of which drives a piece of the app
+with no browser and no network and prints PASS or FAILED. They all run in
+`ci.yml` on every push:
+
+```powershell
+backend/.venv/Scripts/python tools/checkout_sim.py     # Epic's checkout loop
+backend/.venv/Scripts/python tools/dlc_sim.py          # the DLC prerequisite
+backend/.venv/Scripts/python tools/steam_sim.py        # Steam's free package
+backend/.venv/Scripts/python tools/prime_sim.py        # session discovery
+backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenges
+```
+
+When there is a real test suite, put how to run a single test here.
 
 ## Releasing
 
@@ -1607,6 +1730,15 @@ session trusting something nobody has run.
   75-octet fold measured on a deliberately long summary. **Not yet imported
   into a real calendar app**; Google Calendar and Apple Calendar are the
   ones to try, and the strict parser of the two is Apple's.
+- **The ledger's fold and the challenge's effect on an account**, by
+  `tools/ledger_fold_sim.py` against a throwaway database: eleven attempts over
+  three games fold to three rows with the right counts and the newest outcome
+  on each, a limit counts games rather than attempts (so the fold is really in
+  SQL), the outcome filter applies before the fold, `every_attempt=true` still
+  returns all eleven, a `StoreChallenged` run is recorded `attention` with its
+  reason and screenshot while the account's status is left untouched, and
+  `scheduler._unpark_challenged` frees an account an older build parked while
+  keeping the reason on it.
 - That a claim row copies `image_url` off the offer when it is written
   (`runner._record`, same line as `title` and `kind`), read from the code
   path rather than assumed. Rows written before the column existed stay
@@ -1741,6 +1873,16 @@ window. See the two paragraphs on it above.
   found, so the first live GOG giveaway on a signed-in account is the
   measurement - fix the selectors and shapes from that run's log rather than
   re-deriving them.
+- **That waiting out Epic's interstitial works.** The 25-second wait
+  (`epic._wait_out_challenge`) is reasoned from what a Cloudflare managed
+  challenge does - run itself, score the browser, hand back - and not from
+  watching one do it here. The live report it was written against is a
+  screenshot of "One more step / Please complete a security check to continue"
+  that was still up when the check gave its verdict 1.5 s in; nobody has since
+  seen one clear itself, or seen one still there at 25 s. Both outcomes are
+  logged with the page title and URL, which is the measurement to write the
+  next version against. What *is* settled is that the account is no longer
+  parked either way, so the loop that made this urgent cannot recur.
 - **Whether headed actually beats headless** against Epic's detection. CLAUDE.md
   asked for this to be measured and it has not been. Headed is the default as
   the conservative guess. Measuring it is a good early task and needs a signed-in

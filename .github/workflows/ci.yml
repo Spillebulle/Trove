@@ -89,3 +89,7 @@ jobs:
       # with anything real, because it writes accounts and claims into it.
       - name: Session-discovery runner path and the Prime claim loop (no browser)
         run: python tools/prime_sim.py
+
+      # Same rule: its own throwaway DATA_DIR, because it seeds a ledger.
+      - name: The ledger fold, and that a challenge does not park an account
+        run: python tools/ledger_fold_sim.py

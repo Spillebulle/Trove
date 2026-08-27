@@ -250,11 +250,51 @@ def _unpark_blocked_checkouts() -> None:
         db.close()
 
 
+def _unpark_challenged() -> None:
+    """The same recovery for accounts parked over a store's challenge.
+
+    Builds before this one wrote a challenge down as `needs_attention`, which
+    the scheduler skips until a person clears it - and nothing a person can do
+    clears a Cloudflare verdict, so the account sat parked while every run
+    that could have found the verdict gone was skipped. A challenge no longer
+    parks anything; this frees the ones that already are.
+
+    Matched on the sentence, because that is what those builds stored and
+    there is no other mark to go on. The reason and the screenshot are kept:
+    the page is still worth reading, it is just no longer a stop sign. An
+    account that is genuinely signed out is re-parked by its next run's health
+    check, which is the check that should have parked it in the first place.
+    """
+    db = SessionLocal()
+    try:
+        stuck = (
+            db.query(Account)
+            .filter(
+                Account.status == "needs_attention",
+                Account.status_reason.like("%is showing a challenge that needs a person%"),
+            )
+            .all()
+        )
+        for account in stuck:
+            account.status = "ok"
+            logger.info(
+                "Account %s was parked over a store challenge; scheduling it "
+                "again. A challenge is a verdict on the browser, not the "
+                "session, and only another visit can find out it has changed.",
+                account.id,
+            )
+        if stuck:
+            db.commit()
+    finally:
+        db.close()
+
+
 def start() -> None:
     global _supervisor, _housekeeper
     if _supervisor is not None:
         return
     _unpark_blocked_checkouts()
+    _unpark_challenged()
     _supervisor = asyncio.create_task(_supervise(), name="trove-scheduler")
     _housekeeper = asyncio.create_task(_housekeep(), name="trove-housekeeping")
     logger.info("Scheduler started.")

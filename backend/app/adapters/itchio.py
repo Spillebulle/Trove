@@ -68,7 +68,12 @@ from urllib.parse import urljoin
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
-from ..browser import NeedsAttention, screenshot, screenshot_name
+from ..browser import (
+    NeedsAttention,
+    StoreChallenged,
+    screenshot,
+    screenshot_name,
+)
 from .base import (
     BaseAdapter,
     ChallengeWaiter,
@@ -434,7 +439,12 @@ class ItchAdapter(BaseAdapter):
             return False, "itch.io did not load in time."
 
         if await _first_visible(page, CHALLENGE):
-            return False, "itch.io is showing a challenge that needs a person."
+            raise StoreChallenged(
+                "itch.io is showing a challenge that needs a person."
+                " This is the store judging Trove's own browser, not your"
+                " account, so the session behind it may be fine - Trove has"
+                " left it alone and will try again on the next run."
+            )
         if await _first_visible(page, SIGNED_IN, timeout_ms=4000):
             return True, "Signed in."
         if await _first_visible(page, SIGNED_OUT):

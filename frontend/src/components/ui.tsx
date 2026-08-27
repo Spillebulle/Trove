@@ -4,7 +4,7 @@
  * STYLE-GUIDE section 7.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, Gift, TriangleAlert, X } from 'lucide-react'
+import { Check, Gift, MoreHorizontal, TriangleAlert, X } from 'lucide-react'
 import { cn, type Tone, BADGE_CLASS, DOT_CLASS } from '@/lib/utils'
 
 /* ── Page header ─────────────────────────────────────────────────────────── */
@@ -397,6 +397,111 @@ export function Spinner({ className, size }: { className?: string; size?: number
         fill="none"
       />
     </svg>
+  )
+}
+
+/* ── Action menu ─────────────────────────────────────────────────────────── */
+
+/** One entry in an `ActionMenu`. */
+export type MenuAction = {
+  key: string
+  label: string
+  /** What it does, in a few words. Read before choosing, not after. */
+  description?: string
+  icon?: ReactNode
+  onSelect: () => void
+  disabled?: boolean
+  /** Why it is disabled, or what it will do. Always set one when disabled. */
+  title?: string
+}
+
+/**
+ * The actions that are not the one thing to do.
+ *
+ * A header with seven buttons in it is a header with no primary action, and
+ * that is what this page had: two ways to open a browser, two ways to run,
+ * three of them repeated in the notice underneath. The rule now is one
+ * primary, at most one beside it, and the rest here - where they keep their
+ * labels and gain a line saying what they do, which a crowded strip has no
+ * room for.
+ *
+ * Deliberately not a `<select>` and not a hover menu: these are commands, they
+ * are pressed rarely, and a menu that opens on hover opens by accident. It
+ * closes on Escape, on a click outside, and on choosing something.
+ */
+export function ActionMenu({
+  label = 'More',
+  items,
+}: {
+  label?: string
+  items: MenuAction[]
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  if (items.length === 0) return null
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        className="btn-secondary"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <MoreHorizontal className="size-icon" />
+        {label}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="floating absolute right-0 z-30 mt-1 w-64 max-w-[80vw] overflow-hidden p-1"
+        >
+          {items.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="menuitem"
+              disabled={item.disabled}
+              title={item.title}
+              onClick={() => {
+                setOpen(false)
+                item.onSelect()
+              }}
+              className="flex w-full items-start gap-2 rounded-ctl px-2 py-1.5 text-left
+                         transition-colors duration-hover ease-ease
+                         enabled:hover:bg-control-hover disabled:cursor-not-allowed
+                         disabled:opacity-45"
+            >
+              {item.icon && <span className="mt-0.5 shrink-0 text-muted">{item.icon}</span>}
+              <span className="min-w-0">
+                <span className="block text-control text-fg">{item.label}</span>
+                {item.description && (
+                  <span className="block text-tiny text-dim">{item.description}</span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

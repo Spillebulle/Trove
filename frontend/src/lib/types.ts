@@ -104,6 +104,13 @@ export interface Claim {
   key_store: string | null
   screenshot: string | null
   created_at: string | null
+  /**
+   * How many attempts this row stands for. The list is folded to the latest
+   * row per game per account, so an offer a run keeps failing to claim is one
+   * line with a count rather than a page of identical ones. 1 means it is the
+   * only attempt there has been.
+   */
+  attempts: number
 }
 
 export interface Run {

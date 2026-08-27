@@ -53,7 +53,7 @@ export function Ledger() {
     <>
       <PageHeader
         title="Ledger"
-        subtitle="Every attempt, including the ones that found the game already in your library."
+        subtitle="One line per game - the latest attempt at it, including the ones that found it already in your library."
         actions={<Segmented options={FILTERS} value={filter} onChange={setFilter} label="Show" />}
       />
 
@@ -89,16 +89,19 @@ export function Ledger() {
                     {/*
                      * The poster earns its place here: a ledger of what you own
                      * reads as a shelf rather than a log when the artwork is on
-                     * it. Small and fixed-size so the row height does not move,
-                     * and the cell still reads without it - an old row claimed
-                     * before Trove copied posters simply has none.
+                     * it. It is a tile rather than a row thumb - this is the
+                     * page you come to to look at what you have, and the size
+                     * comes off the ladder rather than out of the air. Fixed,
+                     * so the row height does not move, and the cell still reads
+                     * without it: an old row claimed before Trove copied
+                     * posters simply has none.
                      */}
                     <td className="max-w-[26rem] px-strip py-2">
                       <span className="flex items-start gap-3">
                         <Art
                           src={claim.image_url}
                           store={claim.store}
-                          className="mt-0.5 h-10 w-[4.5rem] shrink-0"
+                          className="aspect-wide w-art-tile shrink-0"
                         />
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2">
@@ -111,6 +114,20 @@ export function Ledger() {
                             </span>
                           )}
                       <span className="mt-1 flex flex-wrap items-center gap-2">
+                        {/* This row is the latest attempt at this game, and
+                            says so when there were others. The table still
+                            keeps every one - a run that could not claim
+                            something is a fact - but reading them all back
+                            turned one unclaimable add-on into eight identical
+                            lines a day and buried the week's real claims. */}
+                        {claim.attempts > 1 && (
+                          <span
+                            className="text-small text-dim"
+                            title={`Trove has attempted this ${claim.attempts} times. This is the most recent; the earlier ones are kept but not listed.`}
+                          >
+                            {claim.attempts} attempts
+                          </span>
+                        )}
                         {claim.has_key && (
                           <button
                             type="button"

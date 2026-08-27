@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func
+from sqlalchemy import String, cast, func
 from sqlalchemy.orm import Session
 
 from .. import scheduler, settings_store
@@ -280,7 +281,7 @@ def offer_calendar(db: Session = Depends(get_db)) -> Response:
 # ── Claims ──────────────────────────────────────────────────────────────────
 
 
-def _serialise_claim(claim: Claim, label: str | None) -> ClaimRead:
+def _serialise_claim(claim: Claim, label: str | None, attempts: int = 1) -> ClaimRead:
     return ClaimRead(
         id=claim.id,
         account_id=claim.account_id,
@@ -297,6 +298,7 @@ def _serialise_claim(claim: Claim, label: str | None) -> ClaimRead:
         key_store=claim.key_store,
         screenshot=claim.screenshot,
         created_at=claim.created_at,
+        attempts=attempts,
     )
 
 
@@ -304,22 +306,73 @@ def _serialise_claim(claim: Claim, label: str | None) -> ClaimRead:
 def list_claims(
     account_id: int | None = None,
     outcome: str | None = None,
-    limit: int = Query(100, le=500),
+    limit: Annotated[int, Query(le=500)] = 100,
     offset: int = 0,
+    every_attempt: Annotated[
+        bool,
+        Query(description="One row per attempt, rather than the latest per game."),
+    ] = False,
     db: Session = Depends(get_db),
 ) -> list[ClaimRead]:
+    """The ledger, latest-first.
+
+    By default this is **one row per game per account**: the newest attempt,
+    with `attempts` saying how many it stands for. The table keeps every
+    attempt - that is the record, and a run that could not claim something is
+    a fact worth keeping - but reading it back as one row per visit turned a
+    DLC nobody can claim into eight identical lines a day, which buries the
+    week's actual claims. `every_attempt=true` returns the unfolded list.
+
+    The fold is done in SQL rather than over a page of results, because a page
+    of 200 rows can be twenty games and the client cannot know what it did not
+    receive. `max(id)` is the newest row of a group: ids are handed out in
+    order, so the newest id is the latest attempt, and grouping by it also
+    gives the count for free. Filters apply *before* the fold, so "Claimed"
+    shows the latest claimed row for each game rather than hiding a game whose
+    most recent row is something else.
+    """
     query = db.query(Claim, Account.label).outerjoin(Account, Claim.account_id == Account.id)
     if account_id is not None:
         query = query.filter(Claim.account_id == account_id)
     if outcome:
         query = query.filter(Claim.outcome == outcome)
-    rows = (
-        query.order_by(Claim.created_at.desc(), Claim.id.desc())
+
+    if every_attempt:
+        rows = (
+            query.order_by(Claim.created_at.desc(), Claim.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [_serialise_claim(claim, label) for claim, label in rows]
+
+    # One group per game per account. A claim usually has an offer, and the
+    # offer is the identity; the ones without (a base game bought so a DLC
+    # could be used, an expired checkout) fall back to the title, prefixed so
+    # a title that happens to read as a number cannot collide with an offer id.
+    identity = func.coalesce(cast(Claim.offer_id, String), "t:" + Claim.title)
+    groups = db.query(
+        func.max(Claim.id).label("claim_id"), func.count(Claim.id).label("attempts")
+    )
+    if account_id is not None:
+        groups = groups.filter(Claim.account_id == account_id)
+    if outcome:
+        groups = groups.filter(Claim.outcome == outcome)
+    counted = dict(
+        groups.group_by(Claim.account_id, identity)
+        .order_by(func.max(Claim.id).desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
-    return [_serialise_claim(claim, label) for claim, label in rows]
+    if not counted:
+        return []
+    rows = (
+        query.filter(Claim.id.in_(counted.keys()))
+        .order_by(Claim.created_at.desc(), Claim.id.desc())
+        .all()
+    )
+    return [_serialise_claim(claim, label, counted[claim.id]) for claim, label in rows]
 
 
 @router.get("/claims/{claim_id}/key", response_model=ClaimKey)

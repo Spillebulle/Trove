@@ -20,7 +20,7 @@
  * Trove user can ever see a store session.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, ClipboardPaste } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import RFB from '@novnc/novnc'
 import { screenSocketUrl } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
@@ -29,13 +29,26 @@ import { Spinner } from './ui'
 
 type Phase = 'connecting' | 'live' | 'closed' | 'error'
 
+/**
+ * What the page can do to the screen from outside this component.
+ *
+ * `paste` is here rather than in a button of its own because the clipboard
+ * goes over the VNC connection, which only this component holds - but *where*
+ * it belongs on the bar is a question about the bar, and the bar is the page's.
+ */
+export type ScreenTools = {
+  paste: () => void
+  /** The connection is up; a control that acts on the screen can be enabled. */
+  ready: boolean
+}
+
 export function ScreenView({
   onClose,
   footer,
   status,
 }: {
   onClose: () => void
-  footer?: React.ReactNode
+  footer?: React.ReactNode | ((tools: ScreenTools) => React.ReactNode)
   // A live line of what an assisted step is doing, shown over the picture.
   status?: string | null
 }) {
@@ -133,7 +146,7 @@ export function ScreenView({
   return (
     <div className="flex h-full flex-col gap-3">
       {status && phase === 'live' && (
-        <div className="flex shrink-0 items-start gap-2 rounded-control border border-line-soft bg-raised px-3 py-2 text-small text-fg">
+        <div className="flex shrink-0 items-start gap-2 rounded-tool border border-line-soft bg-dock px-3 py-2 text-small text-fg">
           <Spinner className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1">
             <p
@@ -166,7 +179,7 @@ export function ScreenView({
         </div>
       )}
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-control bg-sunk"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-tool bg-window"
         style={{ containerType: 'size' }}
       >
         {/* noVNC appends its canvas here. The box is sized to the remote's 16:10
@@ -203,24 +216,18 @@ export function ScreenView({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="min-w-0 flex-1 text-small text-dim">
-          This is the screen inside the container, and the browser on it has
-          nothing attached to it: no automation, no remote control, only you.
-          Sign in, answer what the store asks, then close the window. Trove
-          keeps the session and never sees your password.
-        </p>
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={() => void pasteClipboard()}
-          disabled={phase !== 'live'}
-          title="Send what is on your clipboard to the screen, so you can Ctrl+V it there."
-        >
-          <ClipboardPaste className="size-icon" />
-          Paste
-        </button>
-        {footer}
+      {/*
+       * Controls only. There used to be a paragraph here explaining that the
+       * browser on the other side has nothing attached to it - which is true
+       * of the sign-in window and *false* of a watched run, where this same
+       * component shows a browser Playwright is driving. It said so in both.
+       * What a particular screen is belongs to the dialog that opened it, so
+       * it is said in the subtitle now, once and correctly.
+       */}
+      <div className="flex flex-wrap items-center gap-2">
+        {typeof footer === 'function'
+          ? footer({ paste: () => void pasteClipboard(), ready: phase === 'live' })
+          : footer}
       </div>
     </div>
   )

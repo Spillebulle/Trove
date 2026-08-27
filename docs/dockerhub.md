@@ -68,7 +68,7 @@ Trove and copy that account's folder:
 data/profiles/<id>-<slug>/
 ```
 
-into the container's volume at the same path, and press **Check again** on the
+into the container's volume at the same path, and choose **Check the session** on the
 account. Trove asks the store whether the session is good rather than assuming,
 so a profile that did not survive the trip says so.
 

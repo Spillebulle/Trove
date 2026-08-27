@@ -43,7 +43,13 @@ from datetime import datetime, timezone
 import httpx
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
-from ..browser import CheckoutBlocked, NeedsAttention, screenshot, screenshot_name
+from ..browser import (
+    CheckoutBlocked,
+    NeedsAttention,
+    StoreChallenged,
+    screenshot,
+    screenshot_name,
+)
 from .base import (
     BaseAdapter,
     BaseGame,
@@ -124,6 +130,35 @@ CHALLENGE = [
     'text=/verify (your|it.s) you/i',
     'text=/security check/i',
 ]
+
+# How long a challenge is given to answer itself before it is called one.
+#
+# Not every "security check" wants a person. Cloudflare's managed challenge -
+# the "One more step / Please complete a security check to continue" page Epic
+# serves - usually runs in the background, scores the browser and hands back to
+# the store within a few seconds, with nothing on it to click. The check used
+# to read the page 1.5 s after it loaded and file the account for attention on
+# the strength of that, which is how a page that would have cleared itself
+# became "Epic is showing a challenge that needs a person" - and then a loop of
+# sign in, check, challenge, sign in again.
+#
+# So: see one, wait for it. Waiting costs a run a few seconds it was going to
+# spend anyway; not waiting costs a giveaway.
+CHALLENGE_SETTLE_S = 25.0
+
+# What the account is told when the challenge is still there at the end of
+# that. It names both remedies the app already has, because "needs a person"
+# on its own sends somebody to sign in again - which is the one thing that
+# does not help, since the session is usually not what was refused.
+CHALLENGED_REASON = (
+    "Epic put a security check in front of Trove's own browser and it was "
+    "still there after {seconds:.0f} seconds. This is Cloudflare judging the "
+    "browser and the address, not your account, so the session behind it may "
+    "be fine - Trove has left it alone and will try again on the next run. If "
+    "it keeps happening, open the account with “Sign in here” (that "
+    "window is a plain Chrome the checks do accept) or start a fresh browser "
+    "profile."
+)
 
 # The button that places a zero-price order. Epic runs several checkouts at
 # once and renames this button often, so this list is long on purpose and is
@@ -353,6 +388,52 @@ async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 150
         await asyncio.sleep(0.1)
 
 
+async def _wait_out_challenge(page: Page, seconds: float = CHALLENGE_SETTLE_S) -> bool:
+    """Give a challenge that answers itself the time to do it.
+
+    Returns True if the page came clear. This waits and looks; it never
+    clicks, never types and never answers anything - a challenge that wants a
+    person still gets one, it just has to prove it wants one by still being
+    there at the end.
+
+    What it is watching for is either half of the store's own page appearing
+    (the account button, or the "Sign In" link) or the challenge markers going
+    away, because Cloudflare hands back by navigating and the interstitial's
+    markers go with it. It logs where it started and how long it took, so the
+    next session reads a measurement rather than an impression.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + seconds
+    started = loop.time()
+    logger.info(
+        "Epic: a security check is on the page at %s; giving it %.0fs to "
+        "clear on its own.",
+        page.url,
+        seconds,
+    )
+    while loop.time() < deadline:
+        await asyncio.sleep(1.0)
+        # The store itself is back: nothing else needs asking.
+        if await _first_visible(page, SIGNED_IN + SIGNED_OUT, timeout_ms=200):
+            logger.info(
+                "Epic: the security check cleared itself after %.0fs.",
+                loop.time() - started,
+            )
+            return True
+        # Or the markers have simply gone. A page mid-navigation throws inside
+        # `_first_visible`, which swallows it per selector, so this can read
+        # "clear" for an instant during the hand-back; the caller looks for the
+        # store's own shapes next, and a page that is neither reads as
+        # "could not tell" rather than as a challenge.
+        if not await _first_visible(page, CHALLENGE, timeout_ms=200):
+            logger.info(
+                "Epic: the security check went away after %.0fs.",
+                loop.time() - started,
+            )
+            return True
+    return False
+
+
 class EpicAdapter(BaseAdapter):
     store = "epic"
     display_name = "Epic Games Store"
@@ -462,7 +543,24 @@ class EpicAdapter(BaseAdapter):
             return False, "The Epic store did not load in time."
 
         if await _first_visible(page, CHALLENGE):
-            return False, "Epic is showing a challenge that needs a person."
+            if not await _wait_out_challenge(page):
+                try:
+                    title = await page.title()
+                except Exception:  # the page can be mid-navigation
+                    title = "?"
+                logger.info(
+                    "Epic: the security check was still up after %.0fs "
+                    "(title %r, url %s).",
+                    CHALLENGE_SETTLE_S,
+                    title,
+                    page.url,
+                )
+                # Not `return False`: a challenge is a different answer from
+                # "signed out", and the runner has to be able to tell, because
+                # only one of the two is worth parking the account over.
+                raise StoreChallenged(
+                    CHALLENGED_REASON.format(seconds=CHALLENGE_SETTLE_S)
+                )
         if await _first_visible(page, SIGNED_IN, timeout_ms=4000):
             return True, "Signed in."
         if await _first_visible(page, SIGNED_OUT):

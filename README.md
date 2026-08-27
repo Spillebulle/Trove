@@ -200,11 +200,12 @@ sent back to the browser.
 
 ## The ledger
 
-![The ledger table: every attempt with its outcome, filtered by everything, claimed, needed a hand or failed.](docs/images/06-ledger.png)
+![The ledger table: one line per game with its poster and its latest outcome, filtered by everything, claimed, needed a hand or failed.](docs/images/06-ledger.png)
 
-Every attempt is a row, including the ones that found the game already in your
-library, which is most of them after the first week. Trove never claims a game
-it cannot show you a row for. Where something was not claimed and there is a
+One line per game - the latest attempt at it, including the ones that found it
+already in your library, which is most of them after the first week. Every
+attempt is kept, and a game Trove has tried more than once says how many times;
+what it never does is claim a game it cannot show you a row for. Where something was not claimed and there is a
 settled reason - the add-on's game costs money, itch.io only offers a download -
 the row says which, rather than leaving it to look like a thing still to come.
 Keys, where a store hands one out instead of adding to a library, are encrypted

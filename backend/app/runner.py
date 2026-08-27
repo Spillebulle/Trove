@@ -42,6 +42,7 @@ from .browser import (
     CheckoutBlocked,
     NeedsAttention,
     ProfileBusy,
+    StoreChallenged,
     first_page,
     manager,
     screenshot,
@@ -507,6 +508,23 @@ def _already_claimed(db: Session, account_id: int, offer_id: int | None) -> bool
     )
 
 
+def _note_status(
+    db: Session, account: Account, reason: str, shot: str | None = None
+) -> None:
+    """Write down what happened without changing what the account *is*.
+
+    `_set_status` decides both at once, which is right for "signed in" and for
+    "signed out" - the answer and the state are the same fact. A challenge is
+    not: it says the visit was refused and nothing about the session, so the
+    status has to survive it untouched while the reason and the picture are
+    still recorded for a person to read.
+    """
+    account.status_reason = reason
+    account.status_at = utcnow()
+    account.status_screenshot = shot
+    db.commit()
+
+
 def _set_status(
     db: Session,
     account: Account,
@@ -565,7 +583,18 @@ async def check_session(account_id: int) -> tuple[bool, str]:
                 account.id, profile_path, holder="a sign-in check", wait_s=5.0
             ) as context:
                 page = await first_page(context)
-                healthy, sentence = await adapter.health(page)
+                challenged = False
+                try:
+                    healthy, sentence = await adapter.health(page)
+                except StoreChallenged as exc:
+                    # The store refused to answer the question rather than
+                    # answering it "signed out". Say so, and above all do not
+                    # write it down as a broken session: this check runs right
+                    # after somebody has finished signing in by hand, and
+                    # telling them their fresh session is bad - because
+                    # Cloudflare looked at the *driven* browser - is exactly
+                    # the loop that sends them round to sign in again.
+                    challenged, healthy, sentence = True, False, exc.reason
                 shot = None
                 if not healthy:
                     shot = await screenshot(
@@ -573,6 +602,10 @@ async def check_session(account_id: int) -> tuple[bool, str]:
                     )
         except ProfileBusy as exc:
             return False, str(exc)
+
+        if challenged:
+            _note_status(db, account, sentence, shot)
+            return False, sentence
 
         if healthy:
             _set_status(db, account, "ok", None, None)
@@ -752,6 +785,37 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             run.status = "failed"
             run.message = str(exc)
             logger.info("Run %s skipped: %s", run_id, exc)
+        except StoreChallenged as exc:
+            # The store put a challenge in front of the driven browser. The run
+            # is over, but the *account* is not broken and must not be parked:
+            # `needs_attention` is skipped by the scheduler until a person
+            # clears it, so one challenged visit would stop every future run -
+            # and the only thing that can discover the verdict has changed is
+            # another visit. Same reasoning as a blocked checkout, from the
+            # other end. So: the reason and the picture are recorded, the
+            # status is left exactly as it was, and the cadence carries on.
+            run.status = "attention"
+            run.message = exc.reason
+            repeat = account.status_reason == exc.reason
+            _note_status(db, account, exc.reason, exc.screenshot)
+            if not repeat:
+                # Once per spell, not once per run: a challenge that lasts a
+                # week would otherwise be a notification every few hours
+                # saying the same standing thing.
+                notify.send_soon(
+                    "attention",
+                    notify.Notification(
+                        title=f"{label}: {store_name} challenged Trove's browser",
+                        detail=exc.reason,
+                        severity="caution",
+                        context=store_name,
+                        image_path=(
+                            str(settings.screenshots_path / exc.screenshot)
+                            if exc.screenshot
+                            else None
+                        ),
+                    ),
+                )
         except CheckoutBlocked as exc:
             # A captcha the driven browser cannot pass. This is not a failure to
             # fix in the selectors: it is the automation wall, and the remedy is
@@ -948,16 +1012,35 @@ def _pending_offers(
 
 
 async def _check_health(db, account, adapter, page) -> None:
-    """Raise `NeedsAttention` unless the session is signed in; clear stale flags."""
-    healthy, sentence = await adapter.health(page)
+    """Raise `NeedsAttention` unless the session is signed in; clear stale flags.
+
+    A `StoreChallenged` from the adapter is passed straight up with the
+    evidence attached to it. The screenshot is taken here rather than in the
+    adapter because this is where every other one is taken, and a challenge is
+    the one stop where the picture is the whole story.
+    """
+    try:
+        healthy, sentence = await adapter.health(page)
+    except StoreChallenged as exc:
+        if exc.screenshot is None:
+            exc.screenshot = await screenshot(
+                page, screenshot_name(account.id, account.store, "challenge")
+            )
+        raise
     if not healthy:
         shot = await screenshot(
             page, screenshot_name(account.id, account.store, "health")
         )
         raise NeedsAttention(sentence, shot)
 
-    # The session is good, so an old attention flag is stale.
-    if account.status != "ok":
+    # The session is good, so an old attention flag is stale - and so is an
+    # old *reason* on an account that was never parked. A challenge leaves the
+    # status alone and writes only the reason, so nothing here would have
+    # cleared it and the page would have kept explaining a refusal that has
+    # since been sailed straight past. The one reason that must survive is a
+    # pending checkout's: that is a standing fact about an offer, not about
+    # this visit, and it is what the "Finish the claim here" button says.
+    if account.status != "ok" or (account.status_reason and not account.checkout_offer):
         _set_status(db, account, "ok", None, None)
 
 

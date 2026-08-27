@@ -8,7 +8,21 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CornerDownLeft, ExternalLink, Eye, KeyRound, Monitor, Play, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  AtSign,
+  Check,
+  ClipboardPaste,
+  CornerDownLeft,
+  ExternalLink,
+  Eye,
+  Hash,
+  KeyRound,
+  LogIn,
+  Monitor,
+  Play,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react'
 import { api, type SignInForm } from '@/lib/api'
 import { useToast } from '@/lib/app-context'
 import {
@@ -18,7 +32,6 @@ import {
   OUTCOME_TONE,
   RUN_STATUS_LABEL,
   RUN_STATUS_TONE,
-  cn,
   duration,
   everyHours,
   fullTime,
@@ -27,6 +40,7 @@ import {
 import { LiveBrowser } from '@/components/LiveBrowser'
 import { ScreenView } from '@/components/ScreenView'
 import {
+  ActionMenu,
   Art,
   ConfirmDialog,
   Dialog,
@@ -39,6 +53,7 @@ import {
   StatusBadge,
   StoreBadge,
   Toggle,
+  type MenuAction,
 } from '@/components/ui'
 
 export function AccountDetail() {
@@ -359,22 +374,187 @@ export function AccountDetail() {
                     ? 'The live view is open.'
                     : null
 
+  const viaScreen = localSignIn.data?.via === 'screen'
+  const canUseScreen = viaScreen && Boolean(screenInfo.data?.ok)
+  const signInWindowOpen = data.busy_with === 'a sign-in window'
+  const runInProgress = data.busy_with === 'a claim run'
+  const heldReason = busy ? `The browser profile is in use by ${data.busy_with}.` : undefined
+  const canRun = !busy && !needsSignIn && !runNow.isPending
+  // An account left `ok` with a reason on it has had something happen that is
+  // not a fault of its own: a store challenged Trove's browser, or a checkout
+  // is waiting in the un-driven window. The checkout has its own button and
+  // its own words, so this is the other case.
+  const challenged = data.status === 'ok' && Boolean(data.status_reason) && !data.checkout_pending
+
+  /*
+   * One primary action, chosen by what the account is actually doing.
+   *
+   * The header used to show up to seven buttons and the notice under it
+   * repeated three of them, so the page asked a question - which of these am I
+   * supposed to press? - instead of answering one. The order below is the
+   * answer, and it is an order of urgency: something waiting on a person
+   * first, then something in progress worth watching, then the ordinary run.
+   * Nothing was dropped; the rest moved into the menu, with a line each saying
+   * what it does, which a crowded strip had no room for.
+   */
+  const primary: {
+    key: string
+    label: string
+    icon: React.ReactNode
+    onSelect: () => void
+    disabled?: boolean
+    busy?: boolean
+    title: string
+  } =
+    data.waiting_for_captcha && canUseScreen
+      ? {
+          key: 'captcha',
+          label: 'Solve the captcha',
+          icon: <Eye className="size-icon" />,
+          onSelect: watchCurrentRun,
+          title:
+            'The run is paused on a captcha. Answer it on Trove’s screen and the claim carries on.',
+        }
+      : signInWindowOpen && viaScreen
+        ? {
+            key: 'screen',
+            label: 'Show the screen',
+            icon: <Monitor className="size-icon" />,
+            onSelect: () => setScreenOpen(true),
+            title: 'A browser window is already open on Trove’s screen. This shows it.',
+          }
+        : data.checkout_pending && localSignIn.data?.ok
+          ? {
+              key: 'finish',
+              label: 'Finish the claim here',
+              icon: <ExternalLink className="size-icon" />,
+              onSelect: () => finishClaim.mutate(),
+              disabled: busy || finishClaim.isPending,
+              busy: finishClaim.isPending,
+              title:
+                heldReason ??
+                (viaScreen
+                  ? 'Open the checkout in a normal browser window on Trove’s screen and finish it there.'
+                  : 'Open the checkout in a normal browser window on this machine and finish it there.'),
+            }
+          : runInProgress && canUseScreen
+            ? {
+                key: 'watch',
+                label: 'Watch the run',
+                icon: <Eye className="size-icon" />,
+                onSelect: watchCurrentRun,
+                title:
+                  'Jump into the run in progress and watch it on Trove’s screen. Closing it does not stop the run.',
+              }
+            : (needsSignIn || needsHand) && localSignIn.data?.ok
+              ? {
+                  key: 'signin',
+                  label: 'Sign in',
+                  icon: <ExternalLink className="size-icon" />,
+                  onSelect: () => signInHere.mutate(),
+                  disabled: busy || signInHere.isPending,
+                  busy: signInHere.isPending,
+                  title:
+                    heldReason ??
+                    (viaScreen
+                      ? 'Open this account in a normal browser window on Trove’s own screen, and show that screen here.'
+                      : 'Open this account in a normal browser window on this machine.'),
+                }
+              : needsSignIn || needsHand
+                ? {
+                    key: 'live',
+                    label: 'Sign in',
+                    icon: <Monitor className="size-icon" />,
+                    onSelect: () => setLiveOpen(true),
+                    disabled: busy,
+                    title: heldReason ?? 'Open this account in the live view and sign in there.',
+                  }
+                : {
+                    key: 'run',
+                    label: 'Run now',
+                    icon: <Play className="size-icon" />,
+                    onSelect: () => runNow.mutate(),
+                    disabled: !canRun,
+                    busy: runNow.isPending,
+                    title: needsSignIn
+                      ? 'Sign in to this account first. Trove has no password to sign in with.'
+                      : (heldReason ?? 'Check this account for free games now.'),
+                  }
+
+  // Everything else, each with the sentence the strip had no room for.
+  const menu: MenuAction[] = []
+  if (primary.key !== 'run') {
+    menu.push({
+      key: 'run',
+      label: 'Run now',
+      description: 'Check the store for free games.',
+      icon: <Play className="size-icon" />,
+      onSelect: () => runNow.mutate(),
+      disabled: !canRun,
+      title: needsSignIn ? 'Sign in to this account first.' : (heldReason ?? ''),
+    })
+  }
+  if (canUseScreen && !runInProgress) {
+    menu.push({
+      key: 'run-watch',
+      label: 'Run and watch',
+      description: 'Run it on the screen and hold the browser open at the end.',
+      icon: <Eye className="size-icon" />,
+      onSelect: startWatchedRun,
+      disabled: !canRun,
+      title: needsSignIn ? 'Sign in to this account first.' : (heldReason ?? ''),
+    })
+  }
+  if (localSignIn.data?.ok && primary.key !== 'signin') {
+    menu.push({
+      key: 'signin',
+      label: signInWindowOpen ? 'Show the sign-in window' : 'Sign in here',
+      description: viaScreen
+        ? 'A plain browser window on Trove’s screen, with nothing attached to it.'
+        : 'A plain browser window on this machine, with nothing attached to it.',
+      icon: <ExternalLink className="size-icon" />,
+      onSelect: () => (signInWindowOpen && viaScreen ? setScreenOpen(true) : signInHere.mutate()),
+      disabled: (busy && !signInWindowOpen) || signInHere.isPending,
+      title: heldReason ?? '',
+    })
+  }
+  if (primary.key !== 'live') {
+    menu.push({
+      key: 'live',
+      label: 'Live view',
+      description: 'The page as the driven browser sees it. A challenge can refuse it.',
+      icon: <Monitor className="size-icon" />,
+      onSelect: () => setLiveOpen(true),
+      disabled: busy,
+      title: heldReason ?? '',
+    })
+  }
+  menu.push({
+    key: 'check',
+    label: 'Check the session',
+    description: 'Ask the store whether this account is still signed in.',
+    icon: <RefreshCw className="size-icon" />,
+    onSelect: () => checkSessionNow.mutate(),
+    disabled: busy || checkSessionNow.isPending,
+    title: heldReason ?? '',
+  })
+  if (needsHand) {
+    menu.push({
+      key: 'sorted',
+      label: 'I have sorted it',
+      description: 'Clear the flag. The next run is the real test.',
+      icon: <Check className="size-icon" />,
+      onSelect: () => clearAttention.mutate(),
+      disabled: clearAttention.isPending,
+    })
+  }
+
   return (
     <>
       {activity && (
-        <div className="mb-4 flex items-center gap-2 rounded-control border border-line-soft bg-raised px-4 py-2.5 text-body text-fg">
+        <div className="mb-4 flex items-center gap-2 rounded-tool border border-line-soft bg-dock px-4 py-2.5 text-body text-fg">
           <Spinner />
           <span className="min-w-0 flex-1">{activity}</span>
-          {data.busy_with === 'a claim run' && screenInfo.data?.ok && (
-            <button
-              type="button"
-              className={cn('btn-secondary shrink-0', data.waiting_for_captcha && 'btn-primary')}
-              onClick={watchCurrentRun}
-            >
-              <Eye className="size-icon" />
-              {data.waiting_for_captcha ? 'Solve the captcha' : 'Watch'}
-            </button>
-          )}
         </div>
       )}
       <PageHeader
@@ -396,126 +576,17 @@ export function AccountDetail() {
         }
         actions={
           <>
-            {/*
-             * A claim the driven browser could not finish, because Epic put up
-             * a captcha it cannot pass. This opens the un-driven window straight
-             * on the checkout page - the browser the captcha accepts - so the
-             * person clicks "Add to library" and answers it there. Primary and
-             * first, because when it is showing it is the one thing to do.
-             */}
-            {data.checkout_pending && localSignIn.data?.ok && (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => finishClaim.mutate()}
-                disabled={busy || finishClaim.isPending}
-                title={
-                  busy
-                    ? `The browser profile is in use by ${data.busy_with}.`
-                    : localSignIn.data.via === 'screen'
-                      ? 'Open the checkout in a normal browser window on Trove’s screen and finish it there.'
-                      : 'Open the checkout in a normal browser window on this machine and finish it there.'
-                }
-              >
-                {finishClaim.isPending ? <Spinner /> : <ExternalLink className="size-icon" />}
-                Finish the claim here
-              </button>
-            )}
-            {/*
-             * The primary way in, where the machine can manage it. It opens an
-             * ordinary browser window with no automation attached, which is the
-             * only thing a store's challenge will reliably accept an answer
-             * from. The live view stays for the container case and is offered
-             * beside it rather than instead of it.
-             */}
-            {localSignIn.data?.ok && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => signInHere.mutate()}
-                disabled={busy || signInHere.isPending}
-                title={
-                  busy
-                    ? `The browser profile is in use by ${data.busy_with}.`
-                    : localSignIn.data.via === 'screen'
-                      ? "Open this account in a normal browser window on Trove's own screen, and show that screen here."
-                      : 'Open this account in a normal browser window on this machine.'
-                }
-              >
-                {signInHere.isPending ? <Spinner /> : <ExternalLink className="size-icon" />}
-                Sign in here
-              </button>
-            )}
-            {/* The window is already open on the container's screen: offer
-                the screen itself rather than a second window. */}
-            {localSignIn.data?.via === 'screen' && data.busy_with === 'a sign-in window' && (
-              <button type="button" className="btn-secondary" onClick={() => setScreenOpen(true)}>
-                <Monitor className="size-icon" />
-                Show the screen
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setLiveOpen(true)}
-              disabled={busy}
-              // A control that lies is worse than none: when the profile is
-              // held, the button says so rather than opening a window that
-              // closes itself.
-              title={
-                busy
-                  ? `The browser profile is in use by ${data.busy_with}.`
-                  : 'Open this account in a real browser.'
-              }
-            >
-              <Monitor className="size-icon" />
-              Live view
-            </button>
-            {data.busy_with === 'a claim run' && screenInfo.data?.ok && (
-              <button
-                type="button"
-                className={cn('btn-secondary', data.waiting_for_captcha && 'btn-primary')}
-                onClick={watchCurrentRun}
-                title="Jump into the run in progress and watch it on Trove’s screen - and solve a captcha if it is waiting on one."
-              >
-                <Eye className="size-icon" />
-                {data.waiting_for_captcha ? 'Solve the captcha' : 'Watch'}
-              </button>
-            )}
-            {data.busy_with !== 'a claim run' && localSignIn.data?.via === 'screen' && screenInfo.data?.ok && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={startWatchedRun}
-                disabled={runNow.isPending || busy || needsSignIn}
-                title={
-                  needsSignIn
-                    ? 'Sign in to this account first.'
-                    : busy
-                      ? `The browser profile is in use by ${data.busy_with}.`
-                      : 'Run now and watch it happen on Trove’s screen, held open on whatever page it stops at.'
-                }
-              >
-                <Eye className="size-icon" />
-                Run and watch
-              </button>
-            )}
             <button
               type="button"
               className="btn-primary"
-              onClick={() => runNow.mutate()}
-              disabled={runNow.isPending || busy || needsSignIn}
-              title={
-                needsSignIn
-                  ? 'Sign in to this account first. Trove has no password to sign in with.'
-                  : busy
-                    ? `The browser profile is in use by ${data.busy_with}.`
-                    : 'Check this account for free games now.'
-              }
+              onClick={primary.onSelect}
+              disabled={primary.disabled}
+              title={primary.title}
             >
-              {runNow.isPending ? <Spinner /> : <Play className="size-icon" />}
-              Run now
+              {primary.busy ? <Spinner /> : primary.icon}
+              {primary.label}
             </button>
+            <ActionMenu items={menu} />
           </>
         }
       />
@@ -533,59 +604,45 @@ export function AccountDetail() {
             {localSignIn.data.reason} A captcha may refuse the live view. The
             reliable way is to sign in on a desktop and copy that account&rsquo;s
             folder from <span className="keycap">data/profiles/</span> into this
-            machine&rsquo;s, then press Check again.
+            machine&rsquo;s, then choose Check the session under More.
           </p>
         </div>
       )}
 
+      {/*
+       * What is wrong and what the button above it does about it - and no
+       * buttons of its own. It used to carry three, two of which were the same
+       * actions as the header's, so the same page offered "Sign in here" and
+       * "Open a browser window" as if they were different things. The notice
+       * explains; the header acts.
+       */}
       {(needsSignIn || needsHand) && (
-        <div className="notice mb-4 flex flex-wrap items-center gap-3">
-          <p className="min-w-0 flex-1">
+        <div className="notice mb-4">
+          <p>
             {data.status_reason ??
-              (localSignIn.data?.ok
-                ? localSignIn.data.via === 'screen'
-                  ? "This account has not signed in yet. Open a browser window on Trove's screen, sign in by hand, then close it. Trove takes it from there."
-                  : 'This account has not signed in yet. Open a browser window, sign in by hand, then close it. Trove takes it from there.'
-                : 'This account has not signed in yet. Open the live view, sign in by hand, and Trove takes it from there.')}
+              (needsSignIn
+                ? 'This account has not signed in yet.'
+                : 'The last run stopped and needs a person.')}{' '}
+            {localSignIn.data?.ok
+              ? localSignIn.data.via === 'screen'
+                ? 'Press Sign in above and a browser window opens on Trove’s screen; sign in by hand, close it, and Trove takes the session from there.'
+                : 'Press Sign in above and a browser window opens on this machine; sign in by hand, close it, and Trove takes the session from there.'
+              : 'Press Sign in above to open the live view and sign in there.'}
           </p>
-          {localSignIn.data?.ok ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => signInHere.mutate()}
-              disabled={busy || signInHere.isPending}
-            >
-              {signInHere.isPending ? <Spinner /> : null}
-              Open a browser window
-            </button>
-          ) : (
-            <button type="button" className="btn-secondary" onClick={() => setLiveOpen(true)}>
-              Open the live view
-            </button>
-          )}
-          {/* Normally the sign-in window closing checks this by itself. The
-              button is for when nothing was watching: Trove restarted while the
-              window was open, or the profile was signed in some other way. */}
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => checkSessionNow.mutate()}
-            disabled={busy || checkSessionNow.isPending}
-            title="Ask the store whether this account is signed in now."
-          >
-            {checkSessionNow.isPending ? <Spinner /> : null}
-            Check again
-          </button>
-          {needsHand && (
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => clearAttention.mutate()}
-              disabled={clearAttention.isPending}
-            >
-              I have sorted it
-            </button>
-          )}
+        </div>
+      )}
+
+      {/*
+       * A store challenged Trove's own browser. This is deliberately not the
+       * attention notice: the account is not parked, nothing is waiting on a
+       * person, and the schedule carries on - Cloudflare judges the browser and
+       * the address on the visit in front of it, so the next run may well sail
+       * through. Saying "needs a hand" here is what sent somebody round the
+       * loop of signing in again to fix a session that was never broken.
+       */}
+      {challenged && (
+        <div className="notice mb-4">
+          <p>{data.status_reason}</p>
         </div>
       )}
 
@@ -958,7 +1015,7 @@ export function AccountDetail() {
               // most stores an unticked "Remember me" is a session cookie no
               // profile can keep, so it has to be read before the sign-in and
               // not discovered after it.
-              'A normal browser window, opened inside the container with nothing attached to it.' +
+              'A normal browser window, opened inside the container with nothing attached to it: no automation, no remote control, only you. Trove keeps the session and never sees your password.' +
               (localSignIn.data?.sign_in_note ? ' ' + localSignIn.data.sign_in_note : '')
         }
         size="large"
@@ -973,95 +1030,154 @@ export function AccountDetail() {
                 setFinishing(false)
                 refresh()
               }}
-              footer={
+              /*
+               * Two things, and they are different kinds of thing, so they
+               * look different and sit apart: a cluster that puts text into
+               * the window over there, and the one button that finishes.
+               *
+               * The bar used to be seven controls of four shapes in a line -
+               * a filled button, three bare words, a lone arrow glyph, a
+               * paragraph - with nothing saying that five of them were the
+               * same job. They are now one bordered group under a label,
+               * every item an icon and a word, in the order a sign-in form is
+               * filled: the whole thing first, then the pieces.
+               */
+              footer={({ paste, ready }) => (
                 <>
-                  {/* One press that types the email, Enter, the password and
-                      Enter, with the captcha left to the person. Best-effort,
-                      because the window has nothing attached for Trove to read;
-                      the single buttons beside it are the reliable fallback. */}
-                  {screenInfo.data?.typing &&
-                    data.login_email &&
-                    data.has_login_password &&
-                    signInForms.map((form, index) => (
-                      <button
-                        key={form.key}
-                        type="button"
-                        className="btn-secondary"
-                        disabled={assisting}
-                        title={form.description}
-                        onClick={() => void assistedSignIn(form)}
-                      >
-                        {assisting && <Spinner />}
-                        {!assisting && index === 0 && <KeyRound className="size-icon" />}
-                        {/* One shape, one button, and it can say the plain
-                            thing. Several shapes and each says which form it
-                            fills in, because that is the choice being made. */}
-                        {signInForms.length === 1 ? 'Sign in for me' : form.label}
-                      </button>
-                    ))}
-                  {/* The password-manager half: click a field on the screen,
-                      press the button, Trove types it there. Enter is the
-                      one key worth a button, so the hands can stay on this
-                      side of the picture. */}
-                  {screenInfo.data?.typing && (
-                    <span className="flex flex-wrap items-center gap-1">
+                  {(screenInfo.data?.typing || ready) && (
+                    <span className="flex min-w-0 flex-wrap items-center gap-1 rounded-tool border border-line-soft bg-dock px-2 py-1.5">
+                      <span className="px-1 text-tiny text-dim">Type into the window</span>
+                      {/* One press that types the email, Enter, the password
+                          and Enter, with the captcha left to the person.
+                          Best-effort, because the window has nothing attached
+                          for Trove to read; the single buttons beside it are
+                          the reliable fallback. */}
+                      {screenInfo.data?.typing &&
+                        data.login_email &&
+                        data.has_login_password &&
+                        signInForms.map((form) => (
+                          <button
+                            key={form.key}
+                            type="button"
+                            className="btn-secondary"
+                            disabled={assisting}
+                            title={form.description}
+                            onClick={() => void assistedSignIn(form)}
+                          >
+                            {assisting ? <Spinner /> : <LogIn className="size-icon" />}
+                            {/* One shape, one button, and it can say the plain
+                                thing. Several shapes and each says which form
+                                it fills in, because that is the choice being
+                                made. */}
+                            {signInForms.length === 1 ? 'Sign in for me' : form.label}
+                          </button>
+                        ))}
+                      {/* The whole sequence on the left of the line, the
+                          single keys on the right of it. Without the rule they
+                          read as six controls of equal weight, which is what
+                          made the bar a guess. */}
+                      {screenInfo.data?.typing &&
+                        data.login_email &&
+                        data.has_login_password &&
+                        signInForms.length > 0 && (
+                          <span aria-hidden="true" className="mx-1 h-4 w-px bg-line" />
+                        )}
+                      {/* The password-manager half: click a field on the
+                          screen, press the button, Trove types it there. */}
+                      {screenInfo.data?.typing && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={!data.login_email || typeInto.isPending}
+                            title={
+                              data.login_email
+                                ? `Type ${data.login_email} into the field you clicked.`
+                                : 'No email stored; see Store sign-in details on the account page.'
+                            }
+                            onClick={() => typeInto.mutate('email')}
+                          >
+                            <AtSign className="size-icon" />
+                            Email
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={!data.has_login_password || typeInto.isPending}
+                            title={
+                              data.has_login_password
+                                ? 'Type the stored password into the field you clicked.'
+                                : 'No password stored; see Store sign-in details on the account page.'
+                            }
+                            onClick={() => typeInto.mutate('password')}
+                          >
+                            <KeyRound className="size-icon" />
+                            Password
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={!data.has_totp || typeInto.isPending}
+                            title={
+                              data.has_totp
+                                ? 'Type the current authenticator code into the field you clicked.'
+                                : 'No authenticator secret stored.'
+                            }
+                            onClick={() => typeInto.mutate('code')}
+                          >
+                            <Hash className="size-icon" />
+                            Code
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            disabled={typeInto.isPending}
+                            title="Press Enter on the screen, so your hands can stay this side of the picture."
+                            onClick={() => typeInto.mutate('enter')}
+                          >
+                            <CornerDownLeft className="size-icon" />
+                            Enter
+                          </button>
+                        </>
+                      )}
+                      {/* Your own clipboard, not a stored detail - but the same
+                          job, so it belongs in the same group rather than
+                          floating at the far end of the bar as it did. */}
                       <button
                         type="button"
                         className="btn-ghost"
-                        disabled={!data.login_email || typeInto.isPending}
-                        title={data.login_email ? `Type ${data.login_email} into the field you clicked.` : 'No email stored; see Store sign-in details below.'}
-                        onClick={() => typeInto.mutate('email')}
+                        onClick={paste}
+                        disabled={!ready}
+                        title="Send what is on your clipboard to the screen, then press Ctrl+V in the field over there."
                       >
-                        Email
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        disabled={!data.has_login_password || typeInto.isPending}
-                        title={data.has_login_password ? 'Type the stored password into the field you clicked.' : 'No password stored; see Store sign-in details below.'}
-                        onClick={() => typeInto.mutate('password')}
-                      >
-                        <KeyRound className="size-icon" />
-                        Password
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        disabled={!data.has_totp || typeInto.isPending}
-                        title={data.has_totp ? 'Type the current authenticator code.' : 'No authenticator secret stored.'}
-                        onClick={() => typeInto.mutate('code')}
-                      >
-                        Code
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-ghost"
-                        disabled={typeInto.isPending}
-                        title="Press Enter on the screen."
-                        onClick={() => typeInto.mutate('enter')}
-                      >
-                        <CornerDownLeft className="size-icon" />
+                        <ClipboardPaste className="size-icon" />
+                        Paste
                       </button>
                     </span>
                   )}
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => closeSignIn.mutate()}
-                  disabled={closeSignIn.isPending || data.busy_with !== 'a sign-in window'}
-                  title={
-                    data.busy_with !== 'a sign-in window'
-                      ? 'There is no window open for this account.'
-                      : finishing
-                        ? 'Close the checkout window. Trove then checks whether the game landed in your library.'
-                        : 'Close the sign-in window. Trove then checks whether the account is signed in.'
-                  }
-                >
-                  {closeSignIn.isPending ? <Spinner /> : null}
-                  Done, close the window
-                </button>
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => closeSignIn.mutate()}
+                    disabled={closeSignIn.isPending || data.busy_with !== 'a sign-in window'}
+                    title={
+                      data.busy_with !== 'a sign-in window'
+                        ? 'There is no window open for this account.'
+                        : finishing
+                          ? 'Close the checkout window. Trove then checks whether the game landed in your library.'
+                          : 'Close the sign-in window. Trove then checks whether the account is signed in.'
+                    }
+                  >
+                    {closeSignIn.isPending ? <Spinner /> : <Check className="size-icon" />}
+                    {/* Neutral on purpose. This button closes the window and
+                        asks the store what happened; it must not put words in
+                        somebody's mouth about a sign-in that may not have
+                        worked. The tooltip says what follows. */}
+                    Done, close the window
+                  </button>
                 </>
-              }
+              )}
             />
           )}
         </div>
@@ -1102,9 +1218,13 @@ export function AccountDetail() {
               }
               onClose={closeWatch}
               footer={
-                <button type="button" className="btn-secondary" onClick={closeWatch}>
-                  {watchObserving ? 'Close' : 'Done'}
-                </button>
+                <>
+                  <span className="flex-1" />
+                  <button type="button" className="btn-primary" onClick={closeWatch}>
+                    <Check className="size-icon" />
+                    {watchObserving ? 'Close, leave the run going' : 'Done, close the browser'}
+                  </button>
+                </>
               }
             />
           )}
