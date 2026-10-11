@@ -268,6 +268,32 @@ async def _goto(page: Page, url: str) -> None:
         pass
 
 
+_ADD_TO_CART_RE = re.compile(r"addtocart\(\s*(\d+)")
+
+
+async def _cart_call_is_free_license(page: Page, action: str) -> bool:
+    """Does this `addToCart(<subid>)` actually submit a free-license form?
+
+    Steam's `addToCart` looks up `form[name=add_to_cart_<subid>]` first, and
+    when that form's action contains `/freelicense/` it submits the form and
+    never goes near the cart (read from the store's own main.js). A missing
+    form, a cart action, or anything unreadable answers False - the caller
+    then refuses, which is the direction that cannot spend money.
+    """
+    match = _ADD_TO_CART_RE.search(action)
+    if not match:
+        return False
+    try:
+        form = page.locator(f'form[name="add_to_cart_{match.group(1)}"]')
+        if await form.count() != 1:
+            return False
+        target = (await form.get_attribute("action") or "").lower()
+    except Exception as exc:
+        logger.info("Steam: could not read the form behind %s: %s", action, exc)
+        return False
+    return "/freelicense/" in target and "/cart" not in target
+
+
 async def _first_visible(page: Page, selectors: list[str], timeout_ms: int = 1500):
     """The first visible element matching any of these selectors, or None.
 
@@ -861,6 +887,17 @@ class SteamAdapter(BaseAdapter):
             ).lower()
         except Exception:
             action = ""
+        if any(cart in action for cart in _CART_ACTIONS) and await _cart_call_is_free_license(
+            page, action
+        ):
+            # Measured 11 Oct 2026 on Pony Island: the free block's button is
+            # `javascript:addToCart( 1857153)`, but the form it names,
+            # `add_to_cart_1857153`, posts to `/freelicense/addfreelicense/`.
+            # Steam's own `addToCart` (store main.js) checks exactly that -
+            # a form whose action contains `/freelicense/` is submitted as it
+            # stands and the cart is never touched. So the form's action is
+            # the fact, and here it is a free-license grant.
+            return
         if any(cart in action for cart in _CART_ACTIONS):
             # Measured 25 Aug 2026 on the Flight Simulator soundtrack
             # promotion: the page's only purchase block *is* the free package

@@ -1208,13 +1208,15 @@ export function AccountDetail() {
               status={
                 data.waiting_for_captcha
                   ? '⚠ Epic wants a captcha — solve it on the screen below. The claim continues on its own the moment it clears.'
-                  : data.status === 'needs_attention'
-                    ? (data.status_reason ?? 'The run stopped and needs a hand.')
-                    : data.busy_with === 'a claim run'
-                      ? watchObserving
-                        ? 'Watching the run in progress.'
-                        : 'Running… the browser is held open here until you press Done.'
-                      : 'Starting the run…'
+                  : data.watch_note
+                    ? data.watch_note
+                    : data.status === 'needs_attention'
+                      ? (data.status_reason ?? 'The run stopped and needs a hand.')
+                      : data.busy_with === 'a claim run'
+                        ? watchObserving
+                          ? 'Watching the run in progress.'
+                          : 'Running… when it finishes, the browser stays open here until you press Done.'
+                        : 'Starting the run…'
               }
               onClose={closeWatch}
               footer={

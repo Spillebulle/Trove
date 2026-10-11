@@ -21,6 +21,14 @@ again quietly.
    never `False` for a page it failed to read. The runner treats those two
    differently and only one of them is a finding.
 
+4. **A cart-shaped button that is a free grant.** Pony Island (11 Oct 2026)
+   rendered its free block's "Add to Account" as `javascript:addToCart(
+   1857153)` - but the form that names, `add_to_cart_1857153`, posts to
+   `/freelicense/addfreelicense/`, and Steam's own `addToCart` submits such a
+   form without touching the cart. That is free and must be clicked; a
+   cart-action whose form posts to `/cart/`, or has no form, must still be
+   refused.
+
     python tools/steam_sim.py
 """
 from __future__ import annotations
@@ -274,10 +282,77 @@ async def base_game_checks() -> None:
         steam.httpx.AsyncClient, steam._goto = real_client, real_goto
 
 
+class FakeButton:
+    def __init__(self, href: str) -> None:
+        self.href = href
+
+    async def get_attribute(self, name: str):
+        return self.href if name == "href" else None
+
+
+class FakeForm:
+    def __init__(self, action: str | None) -> None:
+        self.action = action
+
+    async def count(self) -> int:
+        return 0 if self.action is None else 1
+
+    async def get_attribute(self, name: str):
+        return self.action
+
+
+class FormPage:
+    """A page holding one `add_to_cart_<subid>` form, or none."""
+
+    def __init__(self, subid: str, action: str | None) -> None:
+        self.subid, self.action = subid, action
+
+    def locator(self, sel: str) -> FakeForm:
+        named = f'form[name="add_to_cart_{self.subid}"]'
+        return FakeForm(self.action if sel == named else None)
+
+
+async def cart_checks() -> None:
+    print("A cart-shaped button and the form behind it:")
+    adapter = steam.SteamAdapter()
+    offer = FreeOffer(external_id="405640", title="Pony Island", url="u", kind="game", extra={})
+
+    async def no_shot(*a, **kw):
+        return None
+
+    adapter._shot = no_shot
+    href = "javascript:addToCart( 1857153);"
+
+    async def verdict(page) -> str:
+        try:
+            await adapter._assert_free_click(page, offer, FakeButton(href))
+            return "click"
+        except steam.NeedsAttention:
+            return "refuse"
+
+    check(
+        "form posts to /freelicense/ (measured)",
+        await verdict(FormPage("1857153", "https://store.steampowered.com/freelicense/addfreelicense/")),
+        "click",
+    )
+    check(
+        "form posts to /cart/",
+        await verdict(FormPage("1857153", "https://store.steampowered.com/cart/")),
+        "refuse",
+    )
+    check("no form at all", await verdict(FormPage("1857153", None)), "refuse")
+    check(
+        "a different sub's free form",
+        await verdict(FormPage("999", "https://store.steampowered.com/freelicense/addfreelicense/")),
+        "refuse",
+    )
+
+
 async def main() -> int:
     package_checks()
     kind_checks()
     await base_game_checks()
+    await cart_checks()
     print()
     if FAILURES:
         for failure in FAILURES:

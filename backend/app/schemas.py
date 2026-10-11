@@ -106,6 +106,9 @@ class AccountRead(Read):
     has_totp: bool
     # A watched run is paused on a captcha waiting for the person on the screen.
     waiting_for_captcha: bool = False
+    # A watched run has finished or stopped and is holding the browser open:
+    # what it came to, so the dialog stops saying "Running...".
+    watch_note: str | None = None
     # A run stopped at a checkout captcha the driven browser cannot pass, so an
     # offer is waiting to be finished by hand in the un-driven sign-in window.
     # Drives the "Finish the claim here" button.

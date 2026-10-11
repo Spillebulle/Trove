@@ -1195,6 +1195,22 @@ things the person put there, and checking it out would buy them. That is not a
 risk to take on somebody's behalf for a free game, so the message now says so
 and asks them to claim that one themselves.
 
+**But `addToCart` is not always the basket (Pony Island, 11 Oct 2026, 0.1.34).** The
+free block's button was `javascript:addToCart( 1857153)` and the refusal above
+fired - yet the form it names, `form[name=add_to_cart_1857153]`, posts to
+`/freelicense/addfreelicense/`. Steam's own `addToCart` (store `main.js`, read)
+checks exactly that: a form whose action contains `/freelicense/` is submitted
+as it stands and the cart is never touched. So `_cart_call_is_free_license`
+reads the form's action, and only a cart call whose form is a free-license
+grant is clicked; no form, or a `/cart/` form, is still refused. The Flight
+Simulator soundtrack was very likely the same shape and was refused wrongly.
+`steam_sim.py` pins all four answers.
+
+A watched run's outcome is not written until the hold ends, so the dialog used
+to say "Running..." over a run that had already stopped - which read as stuck.
+`runner._watch_note` carries what the run came to into the hold, and the
+account read exposes it as `watch_note`.
+
 `tools/steam_sim.py` covers all of it in CI - the free-package pick, the
 add-on rule, and `inspect_base_game`'s four answers - with no browser and no
 network. It earned its place immediately by catching a wrong field name

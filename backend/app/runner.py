@@ -102,6 +102,8 @@ _watch_release: dict[int, asyncio.Event] = {}
 # without it, closing the watch dialog early would set nothing (no waiter yet),
 # and the hold would then open and sit for the full cap with nobody watching.
 _watch_stop: set[int] = set()
+# What each held-open run came to, so the dialog can say it during the hold.
+_watch_note: dict[int, str] = {}
 
 
 def begin_watch(account_id: int) -> None:
@@ -204,7 +206,21 @@ class _CaptchaWaiter:
         )
 
 
-async def _hold_open_for_watch(account_id: int) -> None:
+def _run_summary(run: Run) -> str:
+    """One sentence on a run that finished without stopping."""
+    if run.claimed:
+        return f"The run finished: {run.claimed} claimed. Press Done to close the browser."
+    if run.already_owned:
+        return "The run finished: already in your library. Press Done to close the browser."
+    return "The run finished with nothing claimed. Press Done to close the browser."
+
+
+def watch_note(account_id: int) -> str | None:
+    """What a held-open watched run came to, or None while it is still going."""
+    return _watch_note.get(account_id)
+
+
+async def _hold_open_for_watch(account_id: int, note: str | None = None) -> None:
     """Keep the browser open until the watcher presses Done or the cap passes.
 
     Runs inside the `manager.session` block, so the context - and the window on
@@ -216,6 +232,8 @@ async def _hold_open_for_watch(account_id: int) -> None:
         return  # Done was pressed before we got here; do not hold.
     event = asyncio.Event()
     _watch_release[account_id] = event
+    if note:
+        _watch_note[account_id] = note
     logger.info("Holding the browser open on the screen for account %s.", account_id)
     try:
         await asyncio.wait_for(event.wait(), timeout=WATCH_HOLD_MAX_S)
@@ -223,6 +241,7 @@ async def _hold_open_for_watch(account_id: int) -> None:
         logger.info("The watch hold for account %s timed out; closing.", account_id)
     finally:
         _watch_release.pop(account_id, None)
+        _watch_note.pop(account_id, None)
         _watch_stop.discard(account_id)
 
 
@@ -946,6 +965,12 @@ async def _do_run(
         account.id, profile_path, holder="a claim run", wait_s=2.0
     ) as context:
         page = await first_page(context)
+        # What the run came to, in a sentence, for the watch dialog to show
+        # while the browser is held open. Without it the dialog can only say
+        # "Running..." for the whole hold, because the run's own status is not
+        # written until the hold ends - so a run that had already stopped read
+        # as one stuck on the page.
+        held_note: str | None = None
         try:
             # A waiter for every run - watched or not - so a captcha pauses
             # the run and can be solved by jumping into it on the screen,
@@ -978,13 +1003,19 @@ async def _do_run(
                     return
 
             await _run_claims(db, account, run, adapter, page, pending, waiter)
+        except NeedsAttention as exc:
+            held_note = f"The run stopped: {exc.reason}"
+            raise
+        except Exception as exc:
+            held_note = f"The run failed: {type(exc).__name__}: {exc}"
+            raise
         finally:
             # In watch mode the browser stays on the screen until the person
             # presses Done, whatever the run came to - so a checkout that fails
             # is still there to look at rather than gone in the half-second
             # before the window closes. Outside watch mode this is a no-op.
             if watch:
-                await _hold_open_for_watch(account.id)
+                await _hold_open_for_watch(account.id, held_note or _run_summary(run))
 
 
 def _pending_offers(
