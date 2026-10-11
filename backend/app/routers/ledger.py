@@ -31,6 +31,25 @@ router = APIRouter(prefix="/api", tags=["ledger"], dependencies=[Depends(current
 
 settings = get_settings()
 
+# How long an offer with **no end date** stays "free now" after the store last
+# listed it. A store that gives no deadline (Steam's free-to-keep promotions
+# mostly do not) never lets `ends_at` say the offer is over, so before this a
+# promotion that had ended sat on the Free now page as "Not claimed yet"
+# forever - Crystal Crisis, last listed 14 Sep, still there in October.
+# Discovery stamps `last_seen_at` on every offer it is shown, every few hours
+# (`discovery_interval_hours`, and every claim run for a session-only store),
+# so two days unlisted is many missed sightings, not one failed fetch. A store
+# whose discovery breaks for that long drops its undated offers off the page
+# until it answers again, which is the honest reading of "nobody has seen it".
+UNLISTED_AFTER = timedelta(days=2)
+
+
+def _not_ended(now):
+    """SQL for "this offer has not ended", dated or not."""
+    return (Offer.ends_at > now) | (
+        Offer.ends_at.is_(None) & (Offer.last_seen_at > now - UNLISTED_AFTER)
+    )
+
 
 # ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -42,7 +61,7 @@ def summary(db: Session = Depends(get_db)) -> Summary:
     free_now = (
         db.query(Offer.id)
         .filter(
-            (Offer.ends_at.is_(None)) | (Offer.ends_at > now),
+            _not_ended(now),
             # An announced offer is in the table too now, and "free now" must
             # not count next week: a start in the future means not yet free.
             (Offer.starts_at.is_(None)) | (Offer.starts_at <= now),
@@ -130,7 +149,7 @@ def list_offers(
     query = db.query(Offer)
     if current:
         now = utcnow()
-        query = query.filter((Offer.ends_at.is_(None)) | (Offer.ends_at > now))
+        query = query.filter(_not_ended(now))
     offers = query.order_by(Offer.ends_at.asc().nullslast(), Offer.title.asc()).all()
     return [_serialise_offer(db, offer) for offer in offers]
 
@@ -236,7 +255,7 @@ def offer_calendar(db: Session = Depends(get_db)) -> Response:
     now = utcnow()
     offers = (
         db.query(Offer)
-        .filter((Offer.ends_at.is_(None)) | (Offer.ends_at > now))
+        .filter(_not_ended(now))
         .order_by(Offer.starts_at.asc().nullsfirst(), Offer.title.asc())
         .all()
     )

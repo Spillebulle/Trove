@@ -1211,6 +1211,18 @@ to say "Running..." over a run that had already stopped - which read as stuck.
 `runner._watch_note` carries what the run came to into the hold, and the
 account read exposes it as `watch_note`.
 
+**An offer with no end date ends when the store stops listing it.** Steam's
+free-to-keep promotions mostly give no deadline, and "free now" was
+`ends_at IS NULL OR ends_at > now` - so an undated offer could never end.
+Crystal Crisis, last listed 14 Sep 2026, sat on Free now as "Not claimed yet"
+into October at full price (appdetails: `discount_percent: 0`, 145 kr).
+`ledger._not_ended` now also asks that an undated offer was seen within
+`UNLISTED_AFTER` (two days, i.e. many missed discovery ticks, not one failed
+fetch). It is a read-time rule rather than stamping `ends_at` at discovery,
+deliberately: itch.io's listing is capped and Steam skips a row it cannot
+confirm, so "absent from one answer" is not "over", and a row that reappears
+needs nothing undone. `ledger_fold_sim.py` pins it.
+
 `tools/steam_sim.py` covers all of it in CI - the free-package pick, the
 add-on rule, and `inspect_base_game`'s four answers - with no browser and no
 network. It earned its place immediately by catching a wrong field name

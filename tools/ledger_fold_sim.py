@@ -41,7 +41,9 @@ from app import runner, scheduler  # noqa: E402
 from app.browser import StoreChallenged  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Account, Claim, Offer, Run  # noqa: E402
-from app.routers.ledger import list_claims  # noqa: E402
+from app.routers.ledger import list_claims, list_offers, summary  # noqa: E402
+from app.timeutil import utcnow  # noqa: E402
+from datetime import timedelta  # noqa: E402
 
 Base.metadata.create_all(engine)
 
@@ -255,9 +257,49 @@ def _older_build_is_unparked() -> bool:
         db.close()
 
 
+def _undated_offers_end() -> bool:
+    """An offer with no end date leaves Free now once the store stops listing it.
+
+    Crystal Crisis (Steam, no deadline given) was last listed 14 Sep and still
+    showed as free in October, because only `ends_at` could end an offer.
+    """
+    now = utcnow()
+    db = SessionLocal()
+    try:
+        db.add_all([
+            Offer(store="steam", external_id="u:listed", title="Undated, listed",
+                  last_seen_at=now - timedelta(hours=3)),
+            Offer(store="steam", external_id="u:gone", title="Undated, gone",
+                  last_seen_at=now - timedelta(days=27)),
+            Offer(store="epic", external_id="d:old-sighting", title="Dated, not over",
+                  ends_at=now + timedelta(days=1), last_seen_at=now - timedelta(days=27)),
+            Offer(store="epic", external_id="d:over", title="Dated, over",
+                  ends_at=now - timedelta(hours=1), last_seen_at=now),
+        ])
+        db.commit()
+        titles = {o.title for o in list_offers(current=True, db=db)}
+        free_now = summary(db=db).free_now
+    finally:
+        db.close()
+    expected = {"Undated, listed", "Dated, not over"}
+    got = titles & {"Undated, listed", "Undated, gone", "Dated, not over", "Dated, over"}
+    print("current offers:", sorted(got))
+    ok = got == expected
+    if not ok:
+        print("FAIL: expected", sorted(expected))
+    # The seeded rows from _seed() have no end date and were just seen, so they
+    # count too; what matters is that the gone one does not.
+    print("summary free_now:", free_now, "| listed now:", len(titles))
+    if free_now != len(titles):
+        print("FAIL: the dashboard count disagrees with the Free now list")
+        ok = False
+    return ok
+
+
 async def main() -> int:
     account_id = _seed()
     ok = _fold()
+    ok = _undated_offers_end() and ok
     ok = await _challenge_does_not_park(account_id) and ok
     ok = _older_build_is_unparked() and ok
     print("PASS" if ok else "FAILED")
