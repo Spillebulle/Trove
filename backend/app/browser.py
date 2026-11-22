@@ -313,6 +313,59 @@ class StoreChallenged(NeedsAttention):
     """
 
 
+class StoreUnavailable(StoreChallenged):
+    """The store answered with an error of its own: a 5xx, a 429, or nothing.
+
+    The same fact as a challenge from a different direction, so it inherits
+    the same handling: the run is recorded with the reason, the account is
+    left where it was, and the ordinary cadence tries again. Reported from a
+    live install: GOG's sections API answered `500 Domain Not Found` for a
+    while (an outage on GOG's side; it answered 200 again soon after) and the
+    run's generic failure path parked the account - and the page then told the
+    person to sign in, which could not have fixed a server that was down.
+    itch.io's `429 Too Many Requests` page did the same through the health
+    check, which matched neither signed-in nor signed-out and answered "could
+    not tell". Neither says anything about the session.
+    """
+
+
+def refusal_reason(store_name: str, status: int | None) -> str | None:
+    """The sentence for a store that refused the visit, or None if it did not.
+
+    `status` is the HTTP status the store answered with, or None when nothing
+    arrived. Only 429 and 5xx count: a 403 is how Cloudflare serves a
+    challenge (the adapters' own markers handle that), and any other 4xx is
+    more likely an endpoint that changed, which a person should hear about.
+    """
+    tail = (
+        " That is the store's side, not your account, so Trove has left the"
+        " account alone and will try again on the next run."
+    )
+    if status == 429:
+        return (
+            f"{store_name} answered 429 Too Many Requests: it wants fewer"
+            f" visits from this address for a while." + tail
+        )
+    if status is not None and status >= 500:
+        return f"{store_name}'s own server answered {status}, an error on its end." + tail
+    return None
+
+
+def http_refusal_reason(store_name: str, exc: BaseException) -> str | None:
+    """`refusal_reason` for an httpx failure: a refusing status, or unreachable."""
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        return refusal_reason(store_name, exc.response.status_code)
+    if isinstance(exc, httpx.TransportError):
+        return (
+            f"{store_name} could not be reached ({type(exc).__name__})."
+            " That is the network or the store, not your account, so Trove has"
+            " left the account alone and will try again on the next run."
+        )
+    return None
+
+
 class CheckoutBlocked(NeedsAttention):
     """The checkout hit a captcha the *driven* browser cannot pass.
 

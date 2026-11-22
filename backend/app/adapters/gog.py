@@ -72,9 +72,11 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
 from ..browser import (
+    StoreUnavailable,
+    refusal_reason,
     CheckoutBlocked,
     NeedsAttention,
     StoreChallenged,
@@ -173,7 +175,7 @@ CLAIM_ERROR = [
 ]
 
 
-async def _goto(page: Page, url: str) -> None:
+async def _goto(page: Page, url: str) -> Response | None:
     """Navigate, tolerating a navigation the page replaced under us.
 
     Same tolerance as Epic's, for the same reason: a store that redirects
@@ -183,8 +185,7 @@ async def _goto(page: Page, url: str) -> None:
     timeout still raises, because that genuinely means nothing arrived.
     """
     try:
-        await page.goto(url, wait_until="domcontentloaded")
-        return
+        return await page.goto(url, wait_until="domcontentloaded")
     except PlaywrightTimeout:
         raise
     except Exception as exc:
@@ -384,8 +385,9 @@ class GogAdapter(BaseAdapter):
         it bounces to the front page with `#openlogin` (measured), signed in it
         is the library as JSON. One navigation either way.
         """
+        response: Response | None = None
         try:
-            await _goto(page, USER_GAMES_URL)
+            response = await _goto(page, USER_GAMES_URL)
         except PlaywrightTimeout:
             return False, "GOG did not load in time."
 
@@ -405,6 +407,11 @@ class GogAdapter(BaseAdapter):
         # Neither shape. Say so rather than guessing, same as Epic: an
         # unrecognised page most often means GOG changed something, and calling
         # it "signed out" would send the user to sign in to no effect.
+        refused = refusal_reason("GOG", response.status if response else None)
+        if refused:
+            # A 429 or 5xx page carries neither marker, and "could not tell"
+            # would park the account over the store's own error.
+            raise StoreUnavailable(refused)
         return False, "Could not tell whether this account is signed in."
 
     async def _read_owned_ids(self, page: Page) -> set[str] | None:

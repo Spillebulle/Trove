@@ -23,6 +23,8 @@ import logging
 import random
 from datetime import timedelta
 
+from sqlalchemy import or_
+
 from . import settings_store
 from .adapters import ADAPTER_MAP
 from .config import get_settings
@@ -271,7 +273,18 @@ def _unpark_challenged() -> None:
             db.query(Account)
             .filter(
                 Account.status == "needs_attention",
-                Account.status_reason.like("%is showing a challenge that needs a person%"),
+                or_(
+                    Account.status_reason.like("%is showing a challenge that needs a person%"),
+                    # A store's own 5xx / 429 during discovery, as the generic
+                    # failure path wrote it before `StoreUnavailable` existed
+                    # (GOG's "500 Domain Not Found" outage parked an account
+                    # this way). An outage is not the session either.
+                    Account.status_reason.like("HTTPStatusError: Server error%"),
+                    Account.status_reason.like("HTTPStatusError: Client error '429%"),
+                    Account.status_reason.like("ConnectError:%"),
+                    Account.status_reason.like("ConnectTimeout:%"),
+                    Account.status_reason.like("ReadTimeout:%"),
+                ),
             )
             .all()
         )

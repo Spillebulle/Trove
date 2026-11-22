@@ -74,9 +74,15 @@ import re
 from datetime import datetime, timezone
 
 import httpx
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
-from ..browser import NeedsAttention, screenshot, screenshot_name
+from ..browser import (
+    NeedsAttention,
+    StoreUnavailable,
+    refusal_reason,
+    screenshot,
+    screenshot_name,
+)
 from .base import (
     BaseAdapter,
     BaseGame,
@@ -245,7 +251,7 @@ _FREE_ACTIONS = ("addfreelicense", "addfreebundle", "freelicense")
 _CART_ACTIONS = ("addtocart", "addbundletocart")
 
 
-async def _goto(page: Page, url: str) -> None:
+async def _goto(page: Page, url: str) -> Response | None:
     """Navigate, tolerating a navigation the page replaced under us.
 
     The same tolerance as Epic's `_goto` and for the same reason: a redirect
@@ -254,8 +260,7 @@ async def _goto(page: Page, url: str) -> None:
     loaded. A timeout still raises; that genuinely means nothing arrived.
     """
     try:
-        await page.goto(url, wait_until="domcontentloaded")
-        return
+        return await page.goto(url, wait_until="domcontentloaded")
     except PlaywrightTimeout:
         raise
     except Exception as exc:
@@ -669,8 +674,9 @@ class SteamAdapter(BaseAdapter):
     # ── Session ──────────────────────────────────────────────────────────
 
     async def health(self, page: Page) -> tuple[bool, str]:
+        response: Response | None = None
         try:
-            await _goto(page, STORE_ROOT)
+            response = await _goto(page, STORE_ROOT)
         except PlaywrightTimeout:
             return False, "The Steam store did not load in time."
         if await _first_visible(page, SIGNED_IN, timeout_ms=4000):
@@ -680,6 +686,11 @@ class SteamAdapter(BaseAdapter):
                 "This account is signed out. Sign in again with \"Sign in "
                 "here\" - Steam Guard will want its code."
             )
+        refused = refusal_reason("Steam", response.status if response else None)
+        if refused:
+            # A 429 or 5xx page carries neither marker, and "could not tell"
+            # would park the account over the store's own error.
+            raise StoreUnavailable(refused)
         return False, "Could not tell whether this account is signed in."
 
     # ── Ownership ────────────────────────────────────────────────────────

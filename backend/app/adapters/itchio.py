@@ -66,9 +66,11 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin
 
 import httpx
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
 from ..browser import (
+    StoreUnavailable,
+    refusal_reason,
     NeedsAttention,
     StoreChallenged,
     screenshot,
@@ -100,8 +102,12 @@ LISTING_URL = f"{STORE_ROOT}/games/on-sale"
 MAX_OFFERS = 20
 
 # Between the per-sale page fetches discovery makes for end times. Sessionless
-# and cheap, but still one host being asked twenty things in a row.
-POLITE_DELAY_S = 0.5
+# and cheap, but still one host being asked twenty things in a row - and at
+# 0.5 s it was too fast: a live install was answered `429 Too Many Requests`,
+# and the claim run's browser, which visits the same host straight after
+# discovery, got the 429 page in place of the store. Twenty pages at 3 s is a
+# minute of background work every few hours, which nobody waits on.
+POLITE_DELAY_S = 3.0
 
 
 # ── The selectors ───────────────────────────────────────────────────────────
@@ -197,11 +203,10 @@ BROWSER_PLAY_ONLY = [
 ]
 
 
-async def _goto(page: Page, url: str) -> None:
+async def _goto(page: Page, url: str) -> Response | None:
     """Navigate, tolerating a superseded navigation the way epic._goto does."""
     try:
-        await page.goto(url, wait_until="domcontentloaded")
-        return
+        return await page.goto(url, wait_until="domcontentloaded")
     except PlaywrightTimeout:
         raise
     except Exception as exc:
@@ -340,10 +345,22 @@ class ItchAdapter(BaseAdapter):
             kept = parsed[:MAX_OFFERS]
 
             offers: list[FreeOffer] = []
+            throttled = False
             for entry in kept:
-                ends_at, claimable, min_price = await self._read_sale_page(
-                    client, entry["sale_url"]
-                )
+                if throttled:
+                    # Already told to slow down: stop asking. The offer still
+                    # counts, with its end time and claimability unknown -
+                    # exactly what a sale page that would not load gives.
+                    ends_at, claimable, min_price = None, None, None
+                else:
+                    ends_at, claimable, min_price, throttled = await self._read_sale_page(
+                        client, entry["sale_url"]
+                    )
+                    if throttled:
+                        logger.warning(
+                            "itch.io answered 429 on a sale page; skipping the "
+                            "remaining sale pages this run."
+                        )
                 offers.append(
                     FreeOffer(
                         external_id=entry["game_id"],
@@ -364,13 +381,17 @@ class ItchAdapter(BaseAdapter):
                         },
                     )
                 )
-                await asyncio.sleep(POLITE_DELAY_S)
+                if not throttled:
+                    await asyncio.sleep(POLITE_DELAY_S)
             return offers
 
     async def _read_sale_page(
         self, client: httpx.AsyncClient, sale_url: str
-    ) -> tuple[datetime | None, bool | None, int | None]:
-        """(ends_at, claimable, min_price_cents) off one sale page, best effort.
+    ) -> tuple[datetime | None, bool | None, int | None, bool]:
+        """(ends_at, claimable, min_price_cents, throttled) off one sale page.
+
+        Best effort; `throttled` is True when itch.io answered 429, so the
+        caller stops asking for more pages this run.
 
         Measured markup (24 Aug 2026): the end time is
         `promotion_dates ... <span class="date_format">2026-09-20T13:07:00Z`,
@@ -386,11 +407,13 @@ class ItchAdapter(BaseAdapter):
         """
         try:
             response = await client.get(sale_url)
+            if response.status_code == 429:
+                return None, None, None, True
             response.raise_for_status()
             page_html = response.text
         except Exception as exc:
             logger.info("itch.io: could not read the sale page %s: %s", sale_url, exc)
-            return None, None, None
+            return None, None, None, False
 
         ends_at = None
         # `date_format[^>]*>` rather than `class="date_format">`: itch.io
@@ -426,15 +449,16 @@ class ItchAdapter(BaseAdapter):
             label = html_lib.unescape(button.group(2)).strip().lower()
             if "claim" in label and (min_price or 0) > 0:
                 claimable = True
-        return ends_at, claimable, min_price
+        return ends_at, claimable, min_price, False
 
     # ── Session ──────────────────────────────────────────────────────────
 
     async def health(self, page: Page) -> tuple[bool, str]:
         # The store front, not the /login form: signed in, the front page's
         # header shows the account; the login form would show a form either way.
+        response: Response | None = None
         try:
-            await _goto(page, f"{STORE_ROOT}/")
+            response = await _goto(page, f"{STORE_ROOT}/")
         except PlaywrightTimeout:
             return False, "itch.io did not load in time."
 
@@ -449,6 +473,11 @@ class ItchAdapter(BaseAdapter):
             return True, "Signed in."
         if await _first_visible(page, SIGNED_OUT):
             return False, "This account is signed out. Sign in again with \"Sign in here\"."
+        refused = refusal_reason("itch.io", response.status if response else None)
+        if refused:
+            # A 429 or 5xx page carries neither marker, and "could not tell"
+            # would park the account over the store's own error.
+            raise StoreUnavailable(refused)
         return False, "Could not tell whether this account is signed in."
 
     # ── Ownership ────────────────────────────────────────────────────────

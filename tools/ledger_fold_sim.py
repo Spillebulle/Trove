@@ -38,7 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="trove-ledger-sim-")
 
 from app import runner, scheduler  # noqa: E402
-from app.browser import StoreChallenged  # noqa: E402
+import httpx  # noqa: E402
+
+from app.browser import StoreChallenged, StoreUnavailable, refusal_reason  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Account, Claim, Offer, Run  # noqa: E402
 from app.routers.ledger import list_claims, list_offers, summary  # noqa: E402
@@ -296,12 +298,109 @@ def _undated_offers_end() -> bool:
     return ok
 
 
+async def _store_outage_does_not_park() -> bool:
+    """A store's own 5xx during discovery is not a broken session.
+
+    Reported live: GOG's sections API answered `500 Domain Not Found`, the
+    generic failure path parked the account, and the page told the person to
+    sign in. The real `_do_run` here, with only discovery replaced.
+    """
+    db = SessionLocal()
+    account = Account(label="GOG", store="gog", profile_path="0003-gog", status="ok")
+    db.add(account)
+    db.commit()
+    account_id = account.id
+    db.close()
+
+    def _raiser(status):
+        async def _discover(db, store, exclude_account_id=None):
+            request = httpx.Request("GET", "https://sections.gog.com/v1/pages/2f")
+            response = httpx.Response(status, request=request)
+            raise httpx.HTTPStatusError(f"{status}", request=request, response=response)
+        return _discover
+
+    ok = True
+    original = runner.discover
+    try:
+        for status, expect_run, expect_account in (
+            (500, "attention", "ok"),
+            (429, "attention", "ok"),
+            # A 404 is more likely an endpoint that changed: a person should hear.
+            (404, "failed", "needs_attention"),
+        ):
+            db = SessionLocal()
+            row = db.query(Account).filter(Account.id == account_id).first()
+            row.status, row.status_reason = "ok", None
+            db.commit()
+            db.close()
+            runner.discover = _raiser(status)
+            run_id = await runner.run_account(account_id, trigger="manual")
+            db = SessionLocal()
+            run = db.query(Run).filter(Run.id == run_id).first()
+            row = db.query(Account).filter(Account.id == account_id).first()
+            print(f"discovery {status}: run", run.status, "| account", row.status)
+            if run.status != expect_run or row.status != expect_account:
+                print(f"FAIL: expected run {expect_run}, account {expect_account}")
+                ok = False
+            db.close()
+    finally:
+        runner.discover = original
+
+    # The sentences: only 429 and 5xx are refusals, and never a 403 (that is
+    # how Cloudflare serves a challenge; the adapters' markers handle it).
+    for status, refused in ((200, False), (403, False), (404, False),
+                            (429, True), (500, True), (503, True), (None, False)):
+        if bool(refusal_reason("itch.io", status)) != refused:
+            print(f"FAIL: refusal_reason({status}) should be {refused}")
+            ok = False
+    if not issubclass(StoreUnavailable, StoreChallenged):
+        print("FAIL: StoreUnavailable must take the challenge path")
+        ok = False
+    return ok
+
+
+def _older_build_outage_is_unparked() -> bool:
+    """The recovery also frees an account an older build parked over a 500."""
+    db = SessionLocal()
+    account = Account(
+        label="GOG parked", store="gog", profile_path="0004-gog", status="needs_attention",
+        status_reason=(
+            "HTTPStatusError: Server error '500 Domain Not Found' for url "
+            "'https://sections.gog.com/v1/pages/2f?countryCode=US'"
+        ),
+    )
+    signed_out = Account(
+        label="Signed out", store="gog", profile_path="0005-gog", status="needs_attention",
+        status_reason="This account is signed out. Sign in again with \"Sign in here\".",
+    )
+    db.add_all([account, signed_out])
+    db.commit()
+    ids = account.id, signed_out.id
+    db.close()
+
+    scheduler._unpark_challenged()
+
+    db = SessionLocal()
+    try:
+        freed = db.query(Account).filter(Account.id == ids[0]).first().status
+        kept = db.query(Account).filter(Account.id == ids[1]).first().status
+        print("outage unparked:", freed, "| signed-out left parked:", kept)
+        ok = freed == "ok" and kept == "needs_attention"
+        if not ok:
+            print("FAIL: only the outage should be unparked")
+        return ok
+    finally:
+        db.close()
+
+
 async def main() -> int:
     account_id = _seed()
     ok = _fold()
     ok = _undated_offers_end() and ok
     ok = await _challenge_does_not_park(account_id) and ok
     ok = _older_build_is_unparked() and ok
+    ok = await _store_outage_does_not_park() and ok
+    ok = _older_build_outage_is_unparked() and ok
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 

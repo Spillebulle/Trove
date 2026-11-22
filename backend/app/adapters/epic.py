@@ -41,9 +41,11 @@ import re
 from datetime import datetime, timezone
 
 import httpx
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
 from ..browser import (
+    StoreUnavailable,
+    refusal_reason,
     CheckoutBlocked,
     NeedsAttention,
     StoreChallenged,
@@ -316,7 +318,7 @@ def _net_note(net_errors) -> str:
     return f" The failing request(s): {tail}."
 
 
-async def _goto(page: Page, url: str) -> None:
+async def _goto(page: Page, url: str) -> Response | None:
     """Navigate, tolerating a navigation the page replaced under us.
 
     Epic redirects during load - a locale redirect, a sign-in bounce, and
@@ -332,8 +334,7 @@ async def _goto(page: Page, url: str) -> None:
     raises, because that genuinely means nothing arrived.
     """
     try:
-        await page.goto(url, wait_until="domcontentloaded")
-        return
+        return await page.goto(url, wait_until="domcontentloaded")
     except PlaywrightTimeout:
         raise
     except Exception as exc:
@@ -537,8 +538,9 @@ class EpicAdapter(BaseAdapter):
     # ── Session ──────────────────────────────────────────────────────────
 
     async def health(self, page: Page) -> tuple[bool, str]:
+        response: Response | None = None
         try:
-            await _goto(page, self.login_url)
+            response = await _goto(page, self.login_url)
         except PlaywrightTimeout:
             return False, "The Epic store did not load in time."
 
@@ -568,6 +570,11 @@ class EpicAdapter(BaseAdapter):
         # Neither shape. Say so rather than guessing: an unrecognised page is
         # the thing that most often means Epic changed something, and reporting
         # it as "signed out" would send the user to sign in to no effect.
+        refused = refusal_reason("Epic", response.status if response else None)
+        if refused:
+            # A 429 or 5xx page carries neither marker, and "could not tell"
+            # would park the account over the store's own error.
+            raise StoreUnavailable(refused)
         return False, "Could not tell whether this account is signed in."
 
     async def inspect_base_game(self, page: Page, offer: FreeOffer) -> BaseGame | None:

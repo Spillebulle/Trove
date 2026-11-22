@@ -43,6 +43,8 @@ from .browser import (
     NeedsAttention,
     ProfileBusy,
     StoreChallenged,
+    StoreUnavailable,
+    http_refusal_reason,
     first_page,
     manager,
     screenshot,
@@ -824,7 +826,11 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                 notify.send_soon(
                     "attention",
                     notify.Notification(
-                        title=f"{label}: {store_name} challenged Trove's browser",
+                        title=(
+                            f"{label}: {store_name} is refusing visits for now"
+                            if isinstance(exc, StoreUnavailable)
+                            else f"{label}: {store_name} challenged Trove's browser"
+                        ),
                         detail=exc.reason,
                         severity="caution",
                         context=store_name,
@@ -935,7 +941,20 @@ async def _do_run(
     store = account.store
     adapter = get_adapter(store)
 
-    offers = await discover(db, store, exclude_account_id=account.id)
+    try:
+        offers = await discover(db, store, exclude_account_id=account.id)
+    except Exception as exc:
+        # A store whose server is down or rate-limiting this address has said
+        # nothing about the account, and the generic failure path below would
+        # park it (`needs_attention`) until a person pressed something - the
+        # wrong verdict for an outage that ends on its own. Anything else (a
+        # 404, a payload that no longer parses) still fails loudly: that is
+        # more likely the store changing its endpoint, which wants a person.
+        refused = http_refusal_reason(adapter.display_name, exc)
+        if refused is None:
+            raise
+        logger.info("Discovery for %s refused: %s", store, exc)
+        raise StoreUnavailable(refused) from exc
     run.offers_seen = len(offers)
     db.commit()
 
