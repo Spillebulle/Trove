@@ -614,6 +614,19 @@ live view's version of it was. A human solve in the driven browser is a dead
 end for checkout; do not try to make it pass, and do not confuse the `400`
 (solve refused) with a `403` (would be a hard block).
 
+**And the captcha is not caused by Playwright, unlike Cloudflare's check
+(measured 23 Nov 2026).** After the warm session got Epic past Cloudflare, one
+checkout of "Mark of the Deep" was driven entirely over bare CDP on a copy of a
+freshly signed-in profile - no Playwright anywhere, trusted
+`Input.dispatchMouseEvent` clicks on "Add to library" and "I accept", nothing
+else - and Talon still put up an **interactive image hCaptcha** ("Click the
+flower the bee never lands on"). The plain un-driven window got one too in
+August. So Epic asks a person for every checkout from this setup, whatever
+the driver; it is a risk decision about the order, not a tell to remove. An
+unattended Epic claim would mean solving that puzzle, which this app does not
+do. "Finish the claim here" is the permanent shape of an Epic claim, not a
+workaround; the work worth doing is making that one step cheap.
+
 **So the fallback CLAUDE.md reserved is now built: finish the checkout in the
 un-driven window.** When Epic raises a captcha at checkout, `epic._handle_challenge`
 no longer waits for a driven solve (`_CaptchaWaiter`, now unused by Epic) - it
