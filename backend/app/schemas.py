@@ -258,3 +258,27 @@ class Summary(Read):
     last_run_at: datetime | None
     scheduler_enabled: bool
     scheduler_running: bool
+
+
+# ── API keys ────────────────────────────────────────────────────────────────
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scope: Literal["full", "read_only"] = "full"
+
+
+class ApiKeyRead(Read):
+    id: int
+    name: str
+    scope: str
+    prefix: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiKeyCreated(ApiKeyRead):
+    """The create response: the only place the plaintext ever appears."""
+
+    key: str

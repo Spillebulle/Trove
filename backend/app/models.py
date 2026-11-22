@@ -69,6 +69,33 @@ class AuthUser(Base):
     created_at = Column(DateTime, default=utcnow)
 
 
+class ApiKey(Base):
+    """A long-lived credential for scripts and agents, instead of the cookie.
+
+    The shape is Tally's and HomeLab Manager's: only the SHA-256 of the key is
+    stored, so a leaked database hands over no working key, and the plaintext
+    is shown exactly once, from the create call. `prefix` is the visible head,
+    kept so a key can be found without hashing every row and so the interface
+    can tell two keys apart. Revoking is a timestamp, not a delete, so
+    `last_used_at` still answers "was anything using this before I killed it".
+
+    `scope` is `full` or `read_only`, fixed at creation; changing what a key
+    may do is revoke and re-issue. Whatever the scope, a key never reaches the
+    few things a person must be present for - see `auth.session_user`.
+    """
+
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    scope = Column(String(16), nullable=False, default="full")
+    prefix = Column(String(32), nullable=False, index=True)
+    key_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
 class Account(Base):
     """One store login, and the browser profile that keeps it signed in.
 

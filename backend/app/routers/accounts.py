@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .. import notify, scheduler
 from ..adapters import ADAPTER_MAP, get_adapter, known_stores
-from ..auth import current_user
+from ..auth import current_user, session_user
 from ..keyboard import TypingUnavailable, press_key, type_text
 from ..browser import (
     NoLocalBrowser,
@@ -487,7 +487,7 @@ def can_sign_in_here(account_id: int, db: Session = Depends(get_db)) -> dict:
     }
 
 
-@router.post("/{account_id}/type", status_code=204)
+@router.post("/{account_id}/type", status_code=204, dependencies=[Depends(session_user)])
 def type_into_sign_in(
     account_id: int, body: TypeRequest, db: Session = Depends(get_db)
 ) -> Response:

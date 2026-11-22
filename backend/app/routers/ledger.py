@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from .. import scheduler, settings_store
 from ..adapters import ADAPTER_MAP
-from ..auth import current_user
+from ..auth import current_user, session_user
 from ..config import get_settings
 from ..crypto import decrypt
 from ..db import get_db
@@ -394,7 +394,9 @@ def list_claims(
     return [_serialise_claim(claim, label, counted[claim.id]) for claim, label in rows]
 
 
-@router.get("/claims/{claim_id}/key", response_model=ClaimKey)
+@router.get(
+    "/claims/{claim_id}/key", response_model=ClaimKey, dependencies=[Depends(session_user)]
+)
 def reveal_key(claim_id: int, db: Session = Depends(get_db)) -> ClaimKey:
     """The one endpoint that returns a secret, and only when asked.
 

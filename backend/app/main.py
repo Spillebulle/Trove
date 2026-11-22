@@ -22,7 +22,7 @@ from .auth import bootstrap_admin
 from .browser import manager
 from .config import get_settings
 from .db import init_db
-from .routers import accounts, ledger, live, screen, settings as settings_router
+from .routers import accounts, api_keys, ledger, live, screen, settings as settings_router
 
 settings = get_settings()
 
@@ -90,6 +90,7 @@ if settings.cors_origin_list:
 
 for router in (
     settings_router.router,
+    api_keys.router,
     accounts.router,
     ledger.router,
     live.router,

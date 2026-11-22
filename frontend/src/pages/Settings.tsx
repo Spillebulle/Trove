@@ -12,11 +12,15 @@
  */
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, Stethoscope } from 'lucide-react'
+import { KeyRound, Plus, Send, Stethoscope } from 'lucide-react'
 import { api, type BrowserDiagnostics } from '@/lib/api'
 import { useApp, useToast, type ThemeChoice } from '@/lib/app-context'
-import { REDACTED } from '@/lib/types'
+import { REDACTED, type ApiKey, type ApiKeyCreated, type ApiKeyScope } from '@/lib/types'
+import { fullTime, relativeTime } from '@/lib/utils'
 import {
+  ConfirmDialog,
+  CopyButton,
+  Dialog,
   ErrorState,
   Field,
   PageHeader,
@@ -220,6 +224,8 @@ export function Settings() {
         />
       </Panel>
 
+      <ApiKeys />
+
       <BrowserCheck />
 
       <p className="mt-6 text-small text-dim">
@@ -228,6 +234,276 @@ export function Settings() {
         service, and that is your call to make rather than the app&rsquo;s.
       </p>
     </>
+  )
+}
+
+/*
+ * API keys, for scripts and agents - the same shape as Tally's and HomeLab
+ * Manager's, so a key works the same way across the family.
+ *
+ * Making one is a dialog rather than an inline form because of what comes
+ * after: the plaintext exists only in the create response, and a dialog can
+ * hold it on screen until the person deliberately closes it, where an inline
+ * notice is one stray click from gone.
+ */
+const SCOPES: ReadonlyArray<{ value: ApiKeyScope; label: string }> = [
+  { value: 'full', label: 'Full' },
+  { value: 'read_only', label: 'Read-only' },
+]
+
+const SCOPE_LABEL: Record<ApiKeyScope, string> = {
+  full: 'Full access',
+  read_only: 'Read-only',
+}
+
+const SCOPE_HELP: Record<ApiKeyScope, string> = {
+  full: 'Reads everything and can act: run an account, check a session, change settings. Give it only to something you would trust with your password.',
+  read_only:
+    'Reads accounts, runs, offers and the ledger, and changes nothing. Every write is refused.',
+}
+
+function ApiKeys() {
+  const queryClient = useQueryClient()
+  const { push } = useToast()
+  const [creating, setCreating] = useState(false)
+  const [revoking, setRevoking] = useState<ApiKey | null>(null)
+
+  const keys = useQuery({ queryKey: ['api-keys'], queryFn: api.apiKeys.list })
+
+  const revoke = useMutation({
+    mutationFn: (id: number) => api.apiKeys.revoke(id),
+    onSuccess: () => {
+      setRevoking(null)
+      push('The key is revoked.', 'good')
+      void queryClient.invalidateQueries({ queryKey: ['api-keys'] })
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  const all = keys.data ?? []
+  const live = all.filter((key) => !key.revoked_at)
+
+  return (
+    <Panel
+      title="API keys"
+      count={live.length || undefined}
+      className="mt-4"
+      commands={
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setCreating(true)}
+          title="Make a key for a script or another app."
+        >
+          <Plus className="size-icon" />
+          New key
+        </button>
+      }
+    >
+      {keys.isError ? (
+        <ErrorState error={keys.error} onRetry={() => void keys.refetch()} />
+      ) : keys.isLoading ? (
+        <p className="flex items-center gap-2 text-small text-dim">
+          <Spinner /> Loading the keys.
+        </p>
+      ) : all.length === 0 ? (
+        <p className="text-small text-dim">
+          No keys yet. A key lets a script or an assistant read what Trove is doing, or
+          press its buttons, without your password.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line-soft">
+          {all.map((key) => (
+            <li
+              key={key.id}
+              className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2">
+                  <KeyRound className="size-icon shrink-0 text-dim" aria-hidden="true" />
+                  <span
+                    className={
+                      'truncate text-control ' + (key.revoked_at ? 'text-dim' : 'text-fg')
+                    }
+                  >
+                    {key.name}
+                  </span>
+                  <StatusBadge
+                    tone="neutral"
+                    label={key.revoked_at ? 'Revoked' : (SCOPE_LABEL[key.scope] ?? key.scope)}
+                  />
+                </p>
+                <p className="mt-0.5 text-small text-dim">
+                  <span className="figure">{key.prefix}&hellip;</span> &middot; made{' '}
+                  <span title={fullTime(key.created_at)}>{relativeTime(key.created_at)}</span>{' '}
+                  &middot;{' '}
+                  {key.last_used_at ? (
+                    <span title={fullTime(key.last_used_at)}>
+                      last used {relativeTime(key.last_used_at)}
+                    </span>
+                  ) : (
+                    'never used'
+                  )}
+                </p>
+              </div>
+              {!key.revoked_at && (
+                <button
+                  type="button"
+                  className="btn-ghost shrink-0"
+                  onClick={() => setRevoking(key)}
+                  title="Stop this key working. It cannot be restored."
+                >
+                  Revoke
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-3 border-t border-line-soft pt-3 text-small text-dim">
+        Send a key as <span className="figure">X-API-Key</span> or{' '}
+        <span className="figure">Authorization: Bearer</span>, in a header and never in a
+        URL. Whatever its access, a key cannot make keys, change your password, reveal a
+        stored game key or type your saved sign-in details: those need you signed in
+        here. The{' '}
+        <a href="/api/docs" className="text-accent underline-offset-2 hover:underline">
+          API reference
+        </a>{' '}
+        lists the rest.
+      </p>
+
+      <NewKeyDialog open={creating} onClose={() => setCreating(false)} />
+
+      <ConfirmDialog
+        open={revoking !== null}
+        onClose={() => setRevoking(null)}
+        onConfirm={() => revoking && revoke.mutate(revoking.id)}
+        title={revoking ? `Revoke ${revoking.name}?` : 'Revoke the key?'}
+        consequence="Anything using this key stops working at once, and the key cannot be brought back. Make a new one if it is still needed."
+        confirmLabel="Revoke"
+        busy={revoke.isPending}
+      />
+    </Panel>
+  )
+}
+
+function NewKeyDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const { push } = useToast()
+  const [name, setName] = useState('')
+  const [scope, setScope] = useState<ApiKeyScope>('full')
+  // The plaintext exists only in this response. It is held here until the
+  // person closes the dialog on purpose, and dropped the moment they do.
+  const [issued, setIssued] = useState<ApiKeyCreated | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setName('')
+      setScope('full')
+      setIssued(null)
+    }
+  }, [open])
+
+  const create = useMutation({
+    mutationFn: () => api.apiKeys.create(name.trim(), scope),
+    onSuccess: (key) => {
+      setIssued(key)
+      void queryClient.invalidateQueries({ queryKey: ['api-keys'] })
+    },
+    onError: (error: Error) => push(error.message, 'critical'),
+  })
+
+  if (issued) {
+    return (
+      <Dialog
+        open={open}
+        onClose={onClose}
+        title="Copy the key now"
+        subtitle="Trove keeps only a fingerprint of it, so this is the one time it can be shown."
+        size="small"
+        footer={
+          <button type="button" className="btn-primary" onClick={onClose}>
+            I have copied it
+          </button>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {/* A textarea, so the whole key is readable at phone width, and
+              focus selects it all for copying by hand where the clipboard is
+              refused (plain HTTP, which is how a self-hosted Trove is often
+              reached). */}
+          <textarea
+            readOnly
+            rows={2}
+            value={issued.key}
+            aria-label="Your new API key"
+            className="field figure h-auto resize-none break-all py-1.5 text-small"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <div className="flex items-center gap-2">
+            <CopyButton value={issued.key} label="Copy the key" />
+            <span className="text-small text-dim">
+              {issued.name} &middot; {SCOPE_LABEL[issued.scope]}
+            </span>
+          </div>
+        </div>
+      </Dialog>
+    )
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="New API key"
+      subtitle="Name it after whatever will use it, so you know which one to revoke."
+      size="small"
+      busy={create.isPending ? 'Making the key.' : undefined}
+      footer={
+        <>
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!name.trim() || create.isPending}
+            onClick={() => create.mutate()}
+            title={name.trim() ? 'Make the key.' : 'Give the key a name first.'}
+          >
+            {create.isPending && <Spinner />}
+            Make the key
+          </button>
+        </>
+      }
+    >
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (name.trim() && !create.isPending) create.mutate()
+        }}
+      >
+        <Field label="What is it for?">
+          <input
+            className="field"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Claude, Home Assistant..."
+            maxLength={120}
+            autoComplete="off"
+          />
+        </Field>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-control text-fg">Access</span>
+            <Segmented options={SCOPES} value={scope} onChange={setScope} label="Key access" />
+          </div>
+          <p className="text-small text-dim">{SCOPE_HELP[scope]}</p>
+        </div>
+      </form>
+    </Dialog>
   )
 }
 

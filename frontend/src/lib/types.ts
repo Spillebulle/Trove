@@ -172,3 +172,19 @@ export interface TestResult {
  * never held the real value to begin with.
  */
 export const REDACTED = '__set__'
+
+/** Fixed when a key is issued; changing it is revoke and re-issue. */
+export type ApiKeyScope = 'full' | 'read_only'
+
+export type ApiKey = {
+  id: number
+  name: string
+  scope: ApiKeyScope
+  prefix: string
+  created_at: string | null
+  last_used_at: string | null
+  revoked_at: string | null
+}
+
+/** The create response, the only place the plaintext key ever appears. */
+export type ApiKeyCreated = ApiKey & { key: string }

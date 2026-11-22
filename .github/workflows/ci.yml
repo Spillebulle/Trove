@@ -93,3 +93,7 @@ jobs:
       # Same rule: its own throwaway DATA_DIR, because it seeds a ledger.
       - name: The ledger fold, and that a challenge does not park an account
         run: python tools/ledger_fold_sim.py
+
+      # Its own throwaway DATA_DIR too; drives the real app with TestClient.
+      - name: API keys - scopes, revocation, and what a key never reaches
+        run: python tools/api_key_sim.py

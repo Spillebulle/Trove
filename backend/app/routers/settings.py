@@ -16,6 +16,7 @@ from ..auth import (
     authenticate,
     current_user,
     hash_password,
+    session_user,
     verify_password,
 )
 from ..db import get_db
@@ -64,7 +65,7 @@ def logout(request: Request) -> Response:
 @router.post("/auth/password", status_code=204)
 def change_password(
     body: PasswordChange,
-    username: str = Depends(current_user),
+    username: str = Depends(session_user),
     db: Session = Depends(get_db),
 ) -> Response:
     user = db.query(AuthUser).filter(AuthUser.username == username).first()

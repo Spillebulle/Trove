@@ -1,5 +1,8 @@
 import type {
   Account,
+  ApiKey,
+  ApiKeyCreated,
+  ApiKeyScope,
   AuthStatus,
   Health,
   Claim,
@@ -173,6 +176,14 @@ export const api = {
   runs: {
     list: (query?: { account_id?: number; limit?: number }) =>
       request<Run[]>(withQuery('/api/runs', query as Query)),
+  },
+
+  /** API keys. Cookie-only on the server: a key can never manage keys. */
+  apiKeys: {
+    list: () => request<ApiKey[]>('/api/keys'),
+    create: (name: string, scope: ApiKeyScope) =>
+      post<ApiKeyCreated>('/api/keys', { name, scope }),
+    revoke: (id: number) => request<void>(`/api/keys/${id}`, { method: 'DELETE' }),
   },
 
   settings: {

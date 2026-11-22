@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.23. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.36. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -56,6 +56,25 @@ optional user-supplied TOTP secret, and TOTP secrets are treated as secrets at
 rest like everything else. Automating a store login can breach that store's
 terms of service; the app is for the user's own accounts on their own machine,
 and the README should say so plainly rather than pretending otherwise.
+
+**API keys (0.1.36), and the line they may not cross.** Settings has an "API
+keys" panel in the family's shape (Tally's, HomeLab Manager's): `trv_` + 32
+random bytes, sent as `X-API-Key` or `Authorization: Bearer`, only the SHA-256
+stored, the plaintext shown once in a dialog that holds it until the person
+closes it, revoking is a timestamp so the last use stays visible. Scope is
+`full` or `read_only` (every non-GET refused), fixed at creation. A key acts
+through `auth.current_user`, which every router already depends on, so a new
+endpoint gets key support - and scope enforcement - without remembering to.
+
+**`auth.session_user` is the line.** Whatever its scope, a key gets a 403 with
+a sentence from: issuing or listing keys (a key cannot mint keys or keep
+itself alive), changing the password, revealing a stored game key, and `POST
+/accounts/{id}/type` (typing stored sign-in details). Those are things a
+person does while looking, which is the stored-credentials rule below carried
+over to automation. A new endpoint that decrypts or reveals a secret takes
+`session_user`, not `current_user`. The live view and screen WebSockets read
+the session directly and stay cookie-only. `tools/api_key_sim.py` pins all of
+it through the real app.
 
 **The sign-in loop, and the cookie store (0.1.8).** A person signed in on the
 container's screen, closed the window, and the session check reported them
@@ -322,13 +341,38 @@ Two mistakes, both fixed, and both worth stating as rules.
    which nothing did before: a challenge writes only the reason, so without
    that the page kept explaining a refusal that had since been sailed past.
 
+**A store's own error is the same fact again (0.1.36): `browser.StoreUnavailable`**,
+a `StoreChallenged` subclass, so it takes the same no-park path. Reported live:
+GOG's sections API answered `500 Domain Not Found` for a while (GOG's outage;
+200 again soon after), and the run's generic `except Exception` parked the
+account and the page told the person to sign in. itch.io's `429 Too Many
+Requests` page did it through `health`, which matched neither marker and said
+"could not tell". Now `_do_run` turns a discovery 429 / 5xx / unreachable into
+`StoreUnavailable` (any other 4xx still fails loudly - more likely a changed
+endpoint), and each adapter's `health` checks the navigation's status **only
+at the "could not tell" fallback**, after the challenge handling, because a
+Cloudflare interstitial can itself arrive as a 503 and Epic must still wait it
+out. A 403 is never a refusal here: that is how Cloudflare serves a challenge.
+The 429 was very likely Trove's own: itch.io discovery fetched 20 sale pages
+0.5 s apart and the browser then hit the same host. `POLITE_DELAY_S` is 3 s
+now, and a 429 on a sale page stops the rest of that run's sale-page reads.
+`_unpark_challenged` also frees accounts parked by the old wording
+(`HTTPStatusError: Server error…` and friends).
+
 `health` may therefore raise as well as return, and `adapters/base.py` says so.
 GOG, itch.io and Prime raise it too - the classification is the same fact for
 every store - but **only Epic waits**, because only Epic's challenge has been
 seen here and inventing a wait loop for the other three would be writing
 against a page nobody has looked at.
 
-**What is not established:** whether the wait actually clears a real Epic
+**Measured on the live install, 22 Nov 2026: it does not, there.** Every Epic
+run that day (05:13, 12:02, 21:13) logged the check still up after 25 s, title
+`'Just a moment...'`, on `store.epicgames.com/en-US/`. The account stays
+scheduled (the 0.1.33 half works), but the driven browser is not getting past
+Cloudflare from that address, so Epic claims are not happening there. The
+address paragraph under "What Docker can and cannot do" is the lead.
+
+**What is not established (older note):** whether the wait actually clears a real Epic
 interstitial. The reasoning is sound and the cost of being wrong is 25 seconds
 per challenged run, but nobody has yet watched one clear. The log line names
 the page title and URL it gave up on, which is the measurement to write the
@@ -1517,6 +1561,7 @@ backend/.venv/Scripts/python tools/dlc_sim.py          # the DLC prerequisite
 backend/.venv/Scripts/python tools/steam_sim.py        # Steam's free package
 backend/.venv/Scripts/python tools/prime_sim.py        # session discovery
 backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenges
+backend/.venv/Scripts/python tools/api_key_sim.py      # keys, scopes, the line
 ```
 
 When there is a real test suite, put how to run a single test here.
