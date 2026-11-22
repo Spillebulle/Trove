@@ -397,6 +397,13 @@ verdict is what a person clearing site cookies does; it answers nothing.
 `tools/cloudflare_cookie_sim.py` pins that only those cookies go and that it
 retries exactly once. Only Epic does it, because only Epic's has been seen.
 
+**Seen working on the live install, 22 Nov 2026, run 790:** challenge at
+23:07:00, the 25 s wait failed, cookies dropped at 23:07:25, and the
+screenshot the health check left is the Epic store front, fully rendered in
+the driven browser. The account then read as signed out - correctly, the
+session had expired during the weeks the challenge hid it - which is a
+sign-in by hand, not a fault.
+
 **Before reaching for a different driver, run that probe.** A sibling project
 (Free-Games-Claimer-Remaster) moved from Playwright to nodriver and reports a
 person *can* answer a challenge in its driven browser - the opposite of this
