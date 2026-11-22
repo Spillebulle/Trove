@@ -45,6 +45,7 @@ from .browser import (
     StoreChallenged,
     StoreUnavailable,
     http_refusal_reason,
+    is_refusal_note,
     first_page,
     manager,
     screenshot,
@@ -308,7 +309,33 @@ async def discover(
     adapter = get_adapter(store)
     offers = await adapter.list_free_offers()
     _persist_offers(db, store, offers, exclude_account_id)
+    _clear_refusal_notes(db, store)
     return offers
+
+
+def _clear_refusal_notes(db: Session, store: str) -> None:
+    """The store just answered, so a note saying it would not is stale.
+
+    A refusal (`StoreUnavailable`) writes only the reason and leaves the
+    account scheduled; nothing else cleared it, because the usual clearer is
+    the health check and a run that finds nothing free never opens a browser.
+    So GOG's account kept explaining a 500 from weeks before while its runs
+    were succeeding. Called from `discover`, which both the claim runs and the
+    housekeeping tick go through, so it clears within hours either way.
+
+    Only a refusal note is touched: a challenge's, a signed-out account's or a
+    pending checkout's says something an answered HTTP request cannot settle.
+    """
+    stale = [
+        account
+        for account in db.query(Account).filter(Account.store == store).all()
+        if is_refusal_note(account.status_reason)
+    ]
+    for account in stale:
+        # A refusal never parks an account any more; one an older build parked
+        # over it is freed too, since the store has now plainly answered.
+        _set_status(db, account, "ok", None, None)
+        logger.info("Account %s: %s answered again; cleared its refusal note.", account.id, store)
 
 
 def _persist_offers(

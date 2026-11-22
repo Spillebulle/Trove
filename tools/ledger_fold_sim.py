@@ -393,6 +393,61 @@ def _older_build_outage_is_unparked() -> bool:
         db.close()
 
 
+async def _answered_discovery_clears_refusal_notes() -> bool:
+    """GOG kept explaining a 500 from weeks before while its runs succeeded.
+
+    A discovery the store answers clears a refusal note - the new wording and
+    the old generic one - and leaves a challenge's and a signed-out account's
+    note alone, because an answered HTTP request settles neither.
+    """
+    db = SessionLocal()
+    rows = {
+        "legacy": Account(label="L", store="gog", profile_path="0006-gog", status="ok",
+                          status_reason="HTTPStatusError: Server error '500 Domain Not Found' for url"),
+        "new": Account(label="N", store="gog", profile_path="0007-gog", status="ok",
+                       status_reason=refusal_reason("GOG", 503)),
+        "challenge": Account(label="C", store="gog", profile_path="0008-gog", status="ok",
+                             status_reason="GOG is showing a challenge that needs a person."),
+        "signed_out": Account(label="S", store="gog", profile_path="0009-gog", status="needs_attention",
+                              status_reason="This account is signed out."),
+    }
+    db.add_all(rows.values())
+    db.commit()
+    ids = {k: v.id for k, v in rows.items()}
+    db.close()
+
+    class _Answers:
+        async def list_free_offers(self):
+            return []
+
+    original = runner.get_adapter
+    runner.get_adapter = lambda store: _Answers()
+    try:
+        db = SessionLocal()
+        await runner.discover(db, "gog")
+        db.close()
+    finally:
+        runner.get_adapter = original
+
+    db = SessionLocal()
+    try:
+        got = {k: db.query(Account).filter(Account.id == i).first() for k, i in ids.items()}
+        print("after an answered discovery:",
+              {k: (a.status, bool(a.status_reason)) for k, a in got.items()})
+        ok = (
+            got["legacy"].status_reason is None
+            and got["new"].status_reason is None
+            and got["challenge"].status_reason
+            and got["signed_out"].status == "needs_attention"
+            and got["signed_out"].status_reason
+        )
+        if not ok:
+            print("FAIL: only the refusal notes should clear")
+        return bool(ok)
+    finally:
+        db.close()
+
+
 async def main() -> int:
     account_id = _seed()
     ok = _fold()
@@ -401,6 +456,7 @@ async def main() -> int:
     ok = _older_build_is_unparked() and ok
     ok = await _store_outage_does_not_park() and ok
     ok = _older_build_outage_is_unparked() and ok
+    ok = await _answered_discovery_clears_refusal_notes() and ok
     print("PASS" if ok else "FAILED")
     return 0 if ok else 1
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.36. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.37. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -358,6 +358,15 @@ The 429 was very likely Trove's own: itch.io discovery fetched 20 sale pages
 now, and a 429 on a sale page stops the rest of that run's sale-page reads.
 `_unpark_challenged` also frees accounts parked by the old wording
 (`HTTPStatusError: Server error…` and friends).
+**And the note comes off when the store answers (0.1.37).** A refusal writes
+only the reason, and the usual clearer is the health check - which a run that
+finds nothing free never reaches, so after 0.1.36 GOG's account ran fine and
+still explained a 500 from October. `runner.discover` now clears any
+`browser.is_refusal_note` reason on that store's accounts whenever the store
+answers; claim runs and the housekeeping tick both go through it. Every
+refusal sentence carries `REFUSAL_MARK`, which a challenge's sentence
+deliberately does not: a store answering a plain request says nothing about
+whether it will let the driven browser through.
 
 `health` may therefore raise as well as return, and `adapters/base.py` says so.
 GOG, itch.io and Prime raise it too - the classification is the same fact for

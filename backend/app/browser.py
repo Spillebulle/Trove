@@ -329,6 +329,30 @@ class StoreUnavailable(StoreChallenged):
     """
 
 
+# The words every refusal sentence carries, so a later visit that the store
+# *does* answer can recognise the note as stale and clear it. Deliberately not
+# in a challenge's sentence ("left it alone"): a store answering a plain
+# request says nothing about whether it will wave the driven browser through.
+REFUSAL_MARK = "not your account, so Trove has left the account alone"
+
+# How builds before StoreUnavailable wrote the same fact: the generic failure
+# path's `f"{type(exc).__name__}: {exc}"` of an httpx refusal.
+_LEGACY_REFUSAL_PREFIXES = (
+    "HTTPStatusError: Server error",
+    "HTTPStatusError: Client error '429",
+    "ConnectError:",
+    "ConnectTimeout:",
+    "ReadTimeout:",
+)
+
+
+def is_refusal_note(reason: str | None) -> bool:
+    """Whether an account's reason only says "the store refused a visit"."""
+    if not reason:
+        return False
+    return REFUSAL_MARK in reason or reason.startswith(_LEGACY_REFUSAL_PREFIXES)
+
+
 def refusal_reason(store_name: str, status: int | None) -> str | None:
     """The sentence for a store that refused the visit, or None if it did not.
 
@@ -337,10 +361,7 @@ def refusal_reason(store_name: str, status: int | None) -> str | None:
     challenge (the adapters' own markers handle that), and any other 4xx is
     more likely an endpoint that changed, which a person should hear about.
     """
-    tail = (
-        " That is the store's side, not your account, so Trove has left the"
-        " account alone and will try again on the next run."
-    )
+    tail = f" That is the store's side, {REFUSAL_MARK} and will try again on the next run."
     if status == 429:
         return (
             f"{store_name} answered 429 Too Many Requests: it wants fewer"
@@ -360,8 +381,8 @@ def http_refusal_reason(store_name: str, exc: BaseException) -> str | None:
     if isinstance(exc, httpx.TransportError):
         return (
             f"{store_name} could not be reached ({type(exc).__name__})."
-            " That is the network or the store, not your account, so Trove has"
-            " left the account alone and will try again on the next run."
+            f" That is the network or the store, {REFUSAL_MARK} and will try"
+            " again on the next run."
         )
     return None
 
