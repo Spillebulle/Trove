@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.37. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.38. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -374,12 +374,35 @@ every store - but **only Epic waits**, because only Epic's challenge has been
 seen here and inventing a wait loop for the other three would be writing
 against a page nobody has looked at.
 
-**Measured on the live install, 22 Nov 2026: it does not, there.** Every Epic
-run that day (05:13, 12:02, 21:13) logged the check still up after 25 s, title
-`'Just a moment...'`, on `store.epicgames.com/en-US/`. The account stays
-scheduled (the 0.1.33 half works), but the driven browser is not getting past
-Cloudflare from that address, so Epic claims are not happening there. The
-address paragraph under "What Docker can and cannot do" is the lead.
+**Measured on the live install, 22 Nov 2026: the wait does not clear it - and
+the address was never the cause. The profile's stale clearance cookie was
+(0.1.38).** Every Epic run that day logged the check still up at 25 s. A probe
+in the container then loaded the store four ways on *fresh* profiles -
+Playwright exactly as a run launches it, Playwright without
+`--disable-blink-features=AutomationControlled`, bare CDP with no Playwright
+(nodriver's approach), and a plain un-driven Chrome - and **all four went
+straight in**, from the same address. A copy of the account's own profile was
+challenged; the same copy with only its Cloudflare cookies deleted
+(`cf_clearance`, `__cf_bm`) loaded the store **signed in**. A clearance token
+is bound to the browser and address that earned it, every image update ships a
+newer Chrome, and a token that no longer matches is worse than none:
+Cloudflare challenges it where it waves a clean visitor through. That is the
+mechanism behind "a profile that has been refused once keeps being refused".
+
+So when the wait fails, `epic.health` calls `browser.drop_cloudflare_cookies`
+(Cloudflare's cookie names on that site's domains, nothing else - the sign-in
+survives) and loads the store **once** more; a challenge still there after that
+has no old verdict to blame and is reported as before. Forgetting an expired
+verdict is what a person clearing site cookies does; it answers nothing.
+`tools/cloudflare_cookie_sim.py` pins that only those cookies go and that it
+retries exactly once. Only Epic does it, because only Epic's has been seen.
+
+**Before reaching for a different driver, run that probe.** A sibling project
+(Free-Games-Claimer-Remaster) moved from Playwright to nodriver and reports a
+person *can* answer a challenge in its driven browser - the opposite of this
+file's measurement with Playwright, so the "CDP is structural" conclusion below
+is proven for Playwright only. It was not needed here: the cause was the
+cookie, and Playwright got in with a clean one.
 
 **What is not established (older note):** whether the wait actually clears a real Epic
 interstitial. The reasoning is sound and the cost of being wrong is 25 seconds
@@ -1571,6 +1594,7 @@ backend/.venv/Scripts/python tools/steam_sim.py        # Steam's free package
 backend/.venv/Scripts/python tools/prime_sim.py        # session discovery
 backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenges
 backend/.venv/Scripts/python tools/api_key_sim.py      # keys, scopes, the line
+backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py  # a stale verdict
 ```
 
 When there is a real test suite, put how to run a single test here.
@@ -1890,8 +1914,11 @@ window. See the two paragraphs on it above.
   fire. If it does not, its own log line says what was on the screen instead,
   which is the measurement to write the next version against. Pressing Done is
   unaffected either way.
-- **The itch.io signed-in flow, all of it.** Discovery is measured (see the
-  per-store notes); everything behind a login is not, because there is no
+- **The itch.io signed-in flow - now claimed for real (22 Nov 2026), so read
+  this as history.** Run 789 on the live install claimed three games (The
+  Noise Inside, Family Manners, MOLOKAUST) and recorded six already owned.
+  Before that, discovery was measured (see the
+  per-store notes) and everything behind a login was not, because there is no
   itch.io account here: the signed-in header markers `health` reads, the
   "You own this" ownership banner, the claim control on the download page,
   and therefore the whole `claim()` walk from "Download or claim" through

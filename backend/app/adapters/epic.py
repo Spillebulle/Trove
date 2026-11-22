@@ -44,6 +44,7 @@ import httpx
 from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
 from ..browser import (
+    drop_cloudflare_cookies,
     StoreUnavailable,
     refusal_reason,
     CheckoutBlocked,
@@ -544,8 +545,21 @@ class EpicAdapter(BaseAdapter):
         except PlaywrightTimeout:
             return False, "The Epic store did not load in time."
 
-        if await _first_visible(page, CHALLENGE):
-            if not await _wait_out_challenge(page):
+        if await _first_visible(page, CHALLENGE) and not await _wait_out_challenge(page):
+            # A stale clearance cookie is the measured cause of a challenge that
+            # never clears (see `browser.drop_cloudflare_cookies`): forget it and
+            # look once more. Once, not a loop - a challenge that is still there
+            # with no old verdict to blame is a real one, and is reported.
+            logger.info(
+                "Epic: the security check did not clear; dropping the profile's "
+                "Cloudflare cookies for epicgames.com and loading the store once more."
+            )
+            await drop_cloudflare_cookies(page.context, "epicgames.com")
+            try:
+                response = await _goto(page, self.login_url)
+            except PlaywrightTimeout:
+                return False, "The Epic store did not load in time."
+            if await _first_visible(page, CHALLENGE) and not await _wait_out_challenge(page):
                 try:
                     title = await page.title()
                 except Exception:  # the page can be mid-navigation

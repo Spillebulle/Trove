@@ -97,3 +97,7 @@ jobs:
       # Its own throwaway DATA_DIR too; drives the real app with TestClient.
       - name: API keys - scopes, revocation, and what a key never reaches
         run: python tools/api_key_sim.py
+
+      # The browser half skips itself where no browser is installed.
+      - name: Dropping a stale Cloudflare verdict, and only that
+        run: python tools/cloudflare_cookie_sim.py

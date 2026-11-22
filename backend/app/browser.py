@@ -313,6 +313,31 @@ class StoreChallenged(NeedsAttention):
     """
 
 
+# Cloudflare's own cookies: the clearance token a passed check leaves behind,
+# the bot-management cookie, and the challenge's working state.
+_CLOUDFLARE_COOKIE = re.compile(r"^(cf_clearance|__cf_bm|_cfuvid|__cflb|cf_chl.*)$")
+
+
+async def drop_cloudflare_cookies(context, site: str) -> None:
+    """Forget the Cloudflare verdict a profile holds for `site`, nothing else.
+
+    Measured on the live install, 22 Nov 2026: every Epic run met "Just a
+    moment..." while fresh profiles - driven by Playwright exactly as a run
+    is, from the same container and address - went straight into the store.
+    A copy of the account's profile was challenged; the same copy with only
+    its Cloudflare cookies deleted loaded the store *signed in*. A clearance
+    token is bound to the browser and address that earned it, every image
+    update ships a newer Chrome, and a token that no longer matches is worse
+    than none: Cloudflare challenges it where it waves a clean visitor through.
+
+    This is not answering a challenge. It is the browser forgetting an expired
+    verdict, which is what a person clearing a site's cookies does. The store's
+    own cookies - the sign-in - are untouched, because only these names match.
+    """
+    domain = re.compile(r"(^|\.)" + re.escape(site.lstrip(".")) + r"$")
+    await context.clear_cookies(name=_CLOUDFLARE_COOKIE, domain=domain)
+
+
 class StoreUnavailable(StoreChallenged):
     """The store answered with an error of its own: a 5xx, a 429, or nothing.
 
