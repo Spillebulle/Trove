@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.38. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.39. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -403,6 +403,20 @@ screenshot the health check left is the Epic store front, fully rendered in
 the driven browser. The account then read as signed out - correctly, the
 session had expired during the weeks the challenge hid it - which is a
 sign-in by hand, not a fault.
+
+**And the sign-in window opened on the wrong door (0.1.39).** The person
+signed in, and the check still read "signed out": the profile held a fresh
+`EPIC_SSO`/`EPIC_SSO_RM`, but no store cookie newer than August. `signin_url`
+was Epic's generic `www.epicgames.com/id/login`, which signs a person in to
+Epic and stops; the store then has to pick the session up silently, and Epic's
+sign-in now answers that pickup with a "Welcome back, <name>" chooser that
+wants a click (`/id/login/switch-account`). Measured with Playwright **and**
+with bare CDP on copies of the profile: identical, so it is the profile's
+state and not the driver. The window now opens the store's own "Sign in"
+(`store.epicgames.com/login?state=%2Fen-US%2F`, read off the live button),
+which goes through Epic's sign-in for the store - the chooser click made by
+the person, in the window Epic trusts - and comes back to the store with its
+session set.
 
 **Before reaching for a different driver, run that probe.** A sibling project
 (Free-Games-Claimer-Remaster) moved from Playwright to nodriver and reports a
@@ -1750,8 +1764,9 @@ session trusting something nobody has run.
   (`tools/cookie_persist.py` in the container), and the un-driven window
   carries `--password-store=basic --use-mock-keychain` on its command line.
   This is the sign-in-loop fix; the workflow asserts both.
-- **The sign-in window opens on Epic's real login page, full screen.** The
-  capture shows `www.epicgames.com/id/login`, email-first (one field and a
+- **The sign-in window opens on Epic's real login page, full screen.** (Now
+  reached through the store's own `store.epicgames.com/login` since 0.1.39;
+  see the challenge section.) The capture showed `www.epicgames.com/id/login`, email-first (one field and a
   Continue button; the password field appears only after Continue), the email
   field autofocused, no address bar and no infobar. So the assisted sequence -
   email, Enter/Continue, wait, password, Enter - matches Epic's actual flow,

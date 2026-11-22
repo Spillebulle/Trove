@@ -440,10 +440,20 @@ class EpicAdapter(BaseAdapter):
     store = "epic"
     display_name = "Epic Games Store"
     login_url = f"{STORE_ROOT}/{LOCALE}/"
-    # The email/password form. `www.epicgames.com/id/login` is where the store's
-    # own "Sign In" lands; going straight there is what the assisted sign-in
-    # needs, and it saves a person a click.
-    signin_url = "https://www.epicgames.com/id/login"
+    # The store's own "Sign in", not Epic's generic login page. Measured on the
+    # live install, 22 Nov 2026: the button navigates to this URL, which hands
+    # over to Epic's sign-in *for the store* and comes back to the store with
+    # the store's session set. The generic `www.epicgames.com/id/login` used to
+    # be here: it signs the person in to Epic and stops, so the store never got
+    # a session of its own - a fresh EPIC_SSO in the profile, no store cookie
+    # newer than August, and every check reading "signed out". It worked in
+    # August only because the store could then pick the Epic session up
+    # silently; now Epic's sign-in wants a "Welcome back, <name>" click first
+    # (seen with Playwright and with bare CDP alike - it is the profile's
+    # state, not the driver), which a silent pickup cannot give. Through the
+    # store's own door the person makes that click themselves, in the window
+    # Epic trusts. It is still the same email-first form underneath.
+    signin_url = f"{STORE_ROOT}/login?state=%2F{LOCALE}%2F"
     # Measured, from the capture in the smoke workflow: Epic's login page is
     # email-first. One field and a Continue button; the password field does
     # not exist until Continue has been pressed, which is why the wait after
