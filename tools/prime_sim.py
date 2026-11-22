@@ -78,7 +78,7 @@ class FakeManager:
         self.opens = 0
 
     @asynccontextmanager
-    async def session(self, account_id, profile_path, holder, wait_s=0.0):
+    async def session(self, account_id, profile_path, holder, wait_s=0.0, warm_url=None):
         self.opens += 1
         yield object()
 

@@ -44,7 +44,6 @@ import httpx
 from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeout
 
 from ..browser import (
-    drop_cloudflare_cookies,
     StoreUnavailable,
     refusal_reason,
     CheckoutBlocked,
@@ -440,6 +439,11 @@ class EpicAdapter(BaseAdapter):
     store = "epic"
     display_name = "Epic Games Store"
     login_url = f"{STORE_ROOT}/{LOCALE}/"
+    # Opened before Playwright attaches, so Cloudflare's check on the store can
+    # pass with nothing attached - measured to be the difference between a
+    # check that clears in seconds and one that never does. See
+    # `browser._pass_check_unattached`.
+    warm_url = login_url
     # The store's own "Sign in", not Epic's generic login page. Measured on the
     # live install, 22 Nov 2026: the button navigates to this URL, which hands
     # over to Epic's sign-in *for the store* and comes back to the store with
@@ -556,37 +560,23 @@ class EpicAdapter(BaseAdapter):
             return False, "The Epic store did not load in time."
 
         if await _first_visible(page, CHALLENGE) and not await _wait_out_challenge(page):
-            # A stale clearance cookie is the measured cause of a challenge that
-            # never clears (see `browser.drop_cloudflare_cookies`): forget it and
-            # look once more. Once, not a loop - a challenge that is still there
-            # with no old verdict to blame is a real one, and is reported.
-            logger.info(
-                "Epic: the security check did not clear; dropping the profile's "
-                "Cloudflare cookies for epicgames.com and loading the store once more."
-            )
-            await drop_cloudflare_cookies(page.context, "epicgames.com")
             try:
-                response = await _goto(page, self.login_url)
-            except PlaywrightTimeout:
-                return False, "The Epic store did not load in time."
-            if await _first_visible(page, CHALLENGE) and not await _wait_out_challenge(page):
-                try:
-                    title = await page.title()
-                except Exception:  # the page can be mid-navigation
-                    title = "?"
-                logger.info(
-                    "Epic: the security check was still up after %.0fs "
-                    "(title %r, url %s).",
-                    CHALLENGE_SETTLE_S,
-                    title,
-                    page.url,
-                )
-                # Not `return False`: a challenge is a different answer from
-                # "signed out", and the runner has to be able to tell, because
-                # only one of the two is worth parking the account over.
-                raise StoreChallenged(
-                    CHALLENGED_REASON.format(seconds=CHALLENGE_SETTLE_S)
-                )
+                title = await page.title()
+            except Exception:  # the page can be mid-navigation
+                title = "?"
+            logger.info(
+                "Epic: the security check was still up after %.0fs "
+                "(title %r, url %s).",
+                CHALLENGE_SETTLE_S,
+                title,
+                page.url,
+            )
+            # Not `return False`: a challenge is a different answer from
+            # "signed out", and the runner has to be able to tell, because
+            # only one of the two is worth parking the account over.
+            raise StoreChallenged(
+                CHALLENGED_REASON.format(seconds=CHALLENGE_SETTLE_S)
+            )
         if await _first_visible(page, SIGNED_IN, timeout_ms=4000):
             return True, "Signed in."
         if await _first_visible(page, SIGNED_OUT):

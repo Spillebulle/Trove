@@ -13,6 +13,10 @@ python-multipart==0.0.20
 # adapter that stops signing in is indistinguishable from a store that changed
 # its login page. Upgrade deliberately, with an account to test against.
 playwright==1.49.1
+# A bare DevTools connection for the one moment Playwright must not be attached:
+# opening a store behind Cloudflare (see `browser._pass_check_unattached`).
+# Already present through uvicorn[standard]; stated because Trove uses it itself.
+websockets>=13,<18
 # `zoneinfo` resolves names against the system tz database, which a slim image
 # may not carry, and the schedule's "claim at a polite hour" logic reads local
 # time. Ship the data rather than hope for it.

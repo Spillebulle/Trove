@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.39. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.40. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -374,35 +374,43 @@ every store - but **only Epic waits**, because only Epic's challenge has been
 seen here and inventing a wait loop for the other three would be writing
 against a page nobody has looked at.
 
-**Measured on the live install, 22 Nov 2026: the wait does not clear it - and
-the address was never the cause. The profile's stale clearance cookie was
-(0.1.38).** Every Epic run that day logged the check still up at 25 s. A probe
-in the container then loaded the store four ways on *fresh* profiles -
-Playwright exactly as a run launches it, Playwright without
-`--disable-blink-features=AutomationControlled`, bare CDP with no Playwright
-(nodriver's approach), and a plain un-driven Chrome - and **all four went
-straight in**, from the same address. A copy of the account's own profile was
-challenged; the same copy with only its Cloudflare cookies deleted
-(`cf_clearance`, `__cf_bm`) loaded the store **signed in**. A clearance token
-is bound to the browser and address that earned it, every image update ships a
-newer Chrome, and a token that no longer matches is worse than none:
-Cloudflare challenges it where it waves a clean visitor through. That is the
-mechanism behind "a profile that has been refused once keeps being refused".
+**Measured on the live install, 22-23 Nov 2026: Playwright being attached is
+what keeps Cloudflare's check up, and the warm session is the answer (0.1.40).**
+Every Epic run on 22 Nov logged the check still up at 25 s. Probes in the
+container, on copies of the account's profile, from the same address:
 
-So when the wait fails, `epic.health` calls `browser.drop_cloudflare_cookies`
-(Cloudflare's cookie names on that site's domains, nothing else - the sign-in
-survives) and loads the store **once** more; a challenge still there after that
-has no old verdict to blame and is reported as before. Forgetting an expired
-verdict is what a person clearing site cookies does; it answers nothing.
-`tools/cloudflare_cookie_sim.py` pins that only those cookies go and that it
-retries exactly once. Only Epic does it, because only Epic's has been seen.
+- A *fresh* profile goes straight in under any driver.
+- With the profile's own cookies, the managed check **passes by itself in 6-9 s
+  when nothing Playwright is attached** - a Chrome with only a debugging port,
+  even one sent `Page.navigate`, `Runtime.enable` and `Page.enable` over bare
+  CDP - and **never** passes with Playwright attached (`launch_persistent_context`,
+  `connect_over_cdp`, no viewport, no `--enable-automation`: all the same).
+  Detaching Playwright after the check started does not rescue it.
+- A measured oddity nobody has explained: `--remote-debugging-port=0` makes the
+  check never pass while a fixed port number passes (five runs each way). So
+  `_free_local_port` picks a real number and passes it.
 
-**Seen working on the live install, 22 Nov 2026, run 790:** challenge at
-23:07:00, the 25 s wait failed, cookies dropped at 23:07:25, and the
-screenshot the health check left is the Epic store front, fully rendered in
-the driven browser. The account then read as signed out - correctly, the
-session had expired during the weeks the challenge hid it - which is a
-sign-in by hand, not a fault.
+So `BrowserManager.session(warm_url=...)` (Epic declares `warm_url`, the store
+front) starts real Chrome as a plain subprocess with a fixed debugging port,
+opens the store over bare CDP and waits up to `UNATTACHED_CHECK_S` for the
+title to stop being a challenge (`_pass_check_unattached`, which only reads
+`/json` - it clicks and answers nothing), and only then attaches Playwright
+with `connect_over_cdp`. The check is passed by the browser being looked at,
+not by anything Trove does. Without real Chrome it falls back to the old launch.
+
+**0.1.38's cookie drop was wrong, and is gone.** It deleted `cf_clearance` /
+`__cf_bm` and reloaded; the store front then rendered (run 790), but the
+account read signed out and was parked - and the Epic session itself did not
+survive it. Measured 23 Nov: a fresh sign-in, snapshotted while the window was
+still open, is **authenticated after a plain Chrome restart** (`/id/api/account`
+answers the account) and reads **signed in** through the 0.1.40 path; the same
+sign-in left to 0.1.39's post-sign-in check came back with every Epic cookie
+rewritten and `/id/api/account` answering "You are not authenticated". Do not
+reintroduce a cookie drop. `tools/cloudflare_cookie_sim.py` pins that health
+reports a stuck check once and touches no cookie.
+
+When snapshotting a live profile for a probe: Chrome flushes cookies about every
+30 s, so a copy taken seconds after a sign-in does not contain it.
 
 **And the sign-in window opened on the wrong door (0.1.39).** The person
 signed in, and the check still read "signed out": the profile held a fresh
@@ -419,18 +427,9 @@ the person, in the window Epic trusts - and comes back to the store with its
 session set.
 
 **Before reaching for a different driver, run that probe.** A sibling project
-(Free-Games-Claimer-Remaster) moved from Playwright to nodriver and reports a
-person *can* answer a challenge in its driven browser - the opposite of this
-file's measurement with Playwright, so the "CDP is structural" conclusion below
-is proven for Playwright only. It was not needed here: the cause was the
-cookie, and Playwright got in with a clean one.
-
-**What is not established (older note):** whether the wait actually clears a real Epic
-interstitial. The reasoning is sound and the cost of being wrong is 25 seconds
-per challenged run, but nobody has yet watched one clear. The log line names
-the page title and URL it gave up on, which is the measurement to write the
-next version against. Fixing this the wrong way would be to start clicking
-things in the challenge, and that is the one thing this app does not do.
+(Free-Games-Claimer-Remaster) moved from Playwright to nodriver; the measurement
+above says why that helps it - nodriver is bare CDP - and the warm session takes
+the same benefit for the one step it matters for without changing drivers.
 
 ## The browser has to be real Chrome
 
@@ -1615,7 +1614,7 @@ backend/.venv/Scripts/python tools/steam_sim.py        # Steam's free package
 backend/.venv/Scripts/python tools/prime_sim.py        # session discovery
 backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenges
 backend/.venv/Scripts/python tools/api_key_sim.py      # keys, scopes, the line
-backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py  # a stale verdict
+backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py  # the warm session, no cookie drop
 ```
 
 When there is a real test suite, put how to run a single test here.

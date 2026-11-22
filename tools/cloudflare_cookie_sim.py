@@ -1,19 +1,21 @@
-"""Dropping a stale Cloudflare verdict, and only that.
+"""Cloudflare on Epic: the warm session, and that health no longer drops cookies.
 
-Measured on the live install (22 Nov 2026): the Epic account's profile held a
-`cf_clearance` that no longer matched the browser, and every run met "Just a
-moment..."; the same profile with only Cloudflare's cookies deleted loaded the
-store signed in. This pins:
+History, because this file's name is: 0.1.38 answered a stuck "Just a moment"
+by deleting the profile's Cloudflare cookies and reloading. That got the store
+front to load and broke the sign-in - the store's background session pickup
+needs a clearance earned the normal way, so a signed-in account read as signed
+out and was parked. 0.1.40 removed it and instead opens the store before
+Playwright attaches (`browser._pass_check_unattached`), measured to pass.
 
-  1. `browser.drop_cloudflare_cookies` removes Cloudflare's cookies for the
-     site and its subdomains, and nothing else - not the store's own sign-in
-     cookies, and not a Cloudflare cookie belonging to another site.
-  2. Epic's `health` drops them and looks exactly once more when the check
-     does not clear: a stale verdict gets one retry, a real challenge is
-     still reported as `StoreChallenged`, never looped on.
+What this pins, with no browser and no network:
 
-Part 1 uses a real browser when one is installed (skipped with a note when
-not, as in CI); part 2 is a fake page and needs nothing.
+  1. The challenge-title test recognises Cloudflare's interstitials and not a
+     store page.
+  2. `_free_local_port` hands back a usable port number - a fixed number,
+     because `--remote-debugging-port=0` was measured never to pass.
+  3. Epic declares its warm URL, and its health check, faced with a check that
+     will not clear, reports `StoreChallenged` after one wait: no cookie drop,
+     no reload, no loop.
 
     backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py
 """
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -40,62 +43,43 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         failures.append(label)
 
 
-async def real_browser() -> None:
-    print("Only Cloudflare's cookies for the site go:")
-    try:
-        from playwright.async_api import async_playwright
-
-        async with async_playwright() as p:
-            b = await p.chromium.launch()
-            ctx = await b.new_context()
-            jar = [
-                ("cf_clearance", ".epicgames.com"),
-                ("__cf_bm", ".store.epicgames.com"),
-                ("cf_chl_rc_m", "store.epicgames.com"),
-                ("EPIC_SSO", ".epicgames.com"),
-                ("EPIC_BEARER_TOKEN", ".store.epicgames.com"),
-                ("cf_clearance", ".gog.com"),
-                ("cf_clearance", ".notepicgames.com"),
-            ]
-            await ctx.add_cookies([
-                {"name": n, "value": "x", "domain": d, "path": "/"} for n, d in jar
-            ])
-            await browser.drop_cloudflare_cookies(ctx, "epicgames.com")
-            left = sorted((c["name"], c["domain"]) for c in await ctx.cookies())
-            await b.close()
-    except Exception as exc:  # no browser installed, as in CI
-        print(f"  skip  no browser to test against ({type(exc).__name__})")
-        return
-    names = {n for n, _ in left}
-    check("the Epic sign-in cookies stay", {"EPIC_SSO", "EPIC_BEARER_TOKEN"} <= names, str(left))
-    check("Epic's Cloudflare cookies go, subdomains included",
-          not any(n in ("cf_clearance", "__cf_bm", "cf_chl_rc_m") and "epicgames" in d
-                  and "notepic" not in d for n, d in left), str(left))
-    check("another site's clearance stays", ("cf_clearance", ".gog.com") in left, str(left))
-    check("a look-alike domain is not matched", ("cf_clearance", ".notepicgames.com") in left, str(left))
+def titles_and_port() -> None:
+    print("The pieces of the warm session:")
+    for title, want in (
+        ("Just a moment...", True),
+        ("One more step", True),
+        ("Attention Required! | Cloudflare", True),
+        ("Epic Games Store | Download & Play PC Games", False),
+        ("My Wishlist", False),
+        ("", False),
+        (None, False),
+    ):
+        check(f"is_challenge_title({title!r}) is {want}", browser.is_challenge_title(title) is want)
+    port = browser._free_local_port()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", port))  # it really was free
+    check("a free local port is a real, fixed number", 1024 < port < 65536, str(port))
+    check("Epic declares a warm URL, the store front", epic.EpicAdapter().warm_url == epic.EpicAdapter().login_url)
+    check("nothing else is dropped any more", not hasattr(browser, "drop_cloudflare_cookies"))
 
 
 class _FakeContext:
-    def __init__(self) -> None:
-        self.dropped = 0
-
-    async def clear_cookies(self, **kwargs) -> None:
-        self.dropped += 1
+    async def clear_cookies(self, **kwargs) -> None:  # must never be called
+        failures.append("health cleared cookies")
 
 
 class _FakePage:
-    def __init__(self, challenged_loads: int) -> None:
+    def __init__(self) -> None:
         self.context = _FakeContext()
         self.loads = 0
-        self.challenged_loads = challenged_loads
         self.url = "https://store.epicgames.com/en-US/"
 
     async def title(self) -> str:
         return "Just a moment..."
 
 
-async def health_retries_once() -> None:
-    print("Epic's health retries once, then reports:")
+async def health_reports_once() -> None:
+    print("Epic's health, faced with a check that will not clear:")
     originals = (epic._goto, epic._first_visible, epic._wait_out_challenge)
 
     async def goto(page, url):
@@ -103,41 +87,28 @@ async def health_retries_once() -> None:
         return None
 
     async def first_visible(page, selectors, timeout_ms=1500):
-        challenged = page.loads <= page.challenged_loads
-        if selectors is epic.CHALLENGE:
-            return challenged or None
-        if selectors is epic.SIGNED_IN:
-            return (not challenged) or None
-        return None
+        return True if selectors is epic.CHALLENGE else None
 
     async def wait_out(page, seconds=0):
-        return False  # the check never clears on its own in this sim
+        return False
 
     epic._goto, epic._first_visible, epic._wait_out_challenge = goto, first_visible, wait_out
     try:
-        adapter = epic.EpicAdapter()
-        stale = _FakePage(challenged_loads=1)
-        healthy, _ = await adapter.health(stale)
-        check("a stale verdict: cookies dropped once, store reloaded, signed in",
-              healthy and stale.context.dropped == 1 and stale.loads == 2,
-              f"healthy={healthy} dropped={stale.context.dropped} loads={stale.loads}")
-
-        real = _FakePage(challenged_loads=99)
+        page = _FakePage()
         try:
-            await adapter.health(real)
+            await epic.EpicAdapter().health(page)
             raised = False
         except browser.StoreChallenged:
             raised = True
-        check("a real challenge: still StoreChallenged after one retry, no loop",
-              raised and real.context.dropped == 1 and real.loads == 2,
-              f"raised={raised} dropped={real.context.dropped} loads={real.loads}")
+        check("StoreChallenged, one page load, no cookies touched",
+              raised and page.loads == 1, f"raised={raised} loads={page.loads}")
     finally:
         epic._goto, epic._first_visible, epic._wait_out_challenge = originals
 
 
 async def main() -> int:
-    await real_browser()
-    await health_retries_once()
+    titles_and_port()
+    await health_reports_once()
     print("PASS" if not failures else f"FAILED ({len(failures)})")
     return 0 if not failures else 1
 

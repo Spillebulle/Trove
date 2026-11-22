@@ -242,6 +242,11 @@ class BaseAdapter(ABC):
     # who pressed "Sign in here" wants the login form, not the shop - and the
     # assisted sign-in has to start there. Falls back to `login_url`.
     signin_url: str = ""
+    # A page to open before Playwright attaches, so a Cloudflare check on it can
+    # pass with nothing attached (`browser._pass_check_unattached`). Empty means
+    # the session launches through Playwright as it always has. Set it only for
+    # a store whose check has been seen to need it.
+    warm_url: str = ""
 
     # The shapes this store's login form comes in, for the "Sign in for me"
     # button - one entry per shape, in the order the interface offers them.

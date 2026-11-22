@@ -628,7 +628,8 @@ async def check_session(account_id: int) -> tuple[bool, str]:
 
         try:
             async with manager.session(
-                account.id, profile_path, holder="a sign-in check", wait_s=5.0
+                account.id, profile_path, holder="a sign-in check", wait_s=5.0,
+                warm_url=adapter.warm_url or None,
             ) as context:
                 page = await first_page(context)
                 challenged = False
@@ -732,7 +733,8 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
         )
         try:
             async with manager.session(
-                account.id, profile_path, holder="a checkout check", wait_s=5.0
+                account.id, profile_path, holder="a checkout check", wait_s=5.0,
+                warm_url=adapter.warm_url or None,
             ) as context:
                 page = await first_page(context)
                 owned = await adapter.is_owned(page, offer)
@@ -1008,7 +1010,8 @@ async def _do_run(
         return
 
     async with manager.session(
-        account.id, profile_path, holder="a claim run", wait_s=2.0
+        account.id, profile_path, holder="a claim run", wait_s=2.0,
+        warm_url=adapter.warm_url or None,
     ) as context:
         page = await first_page(context)
         # What the run came to, in a sentence, for the watch dialog to show

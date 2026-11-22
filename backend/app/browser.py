@@ -313,31 +313,6 @@ class StoreChallenged(NeedsAttention):
     """
 
 
-# Cloudflare's own cookies: the clearance token a passed check leaves behind,
-# the bot-management cookie, and the challenge's working state.
-_CLOUDFLARE_COOKIE = re.compile(r"^(cf_clearance|__cf_bm|_cfuvid|__cflb|cf_chl.*)$")
-
-
-async def drop_cloudflare_cookies(context, site: str) -> None:
-    """Forget the Cloudflare verdict a profile holds for `site`, nothing else.
-
-    Measured on the live install, 22 Nov 2026: every Epic run met "Just a
-    moment..." while fresh profiles - driven by Playwright exactly as a run
-    is, from the same container and address - went straight into the store.
-    A copy of the account's profile was challenged; the same copy with only
-    its Cloudflare cookies deleted loaded the store *signed in*. A clearance
-    token is bound to the browser and address that earned it, every image
-    update ships a newer Chrome, and a token that no longer matches is worse
-    than none: Cloudflare challenges it where it waves a clean visitor through.
-
-    This is not answering a challenge. It is the browser forgetting an expired
-    verdict, which is what a person clearing a site's cookies does. The store's
-    own cookies - the sign-in - are untouched, because only these names match.
-    """
-    domain = re.compile(r"(^|\.)" + re.escape(site.lstrip(".")) + r"$")
-    await context.clear_cookies(name=_CLOUDFLARE_COOKIE, domain=domain)
-
-
 class StoreUnavailable(StoreChallenged):
     """The store answered with an error of its own: a 5xx, a 429, or nothing.
 
@@ -786,6 +761,164 @@ def launch_detached(profile_path: Path, url: str):
     )
 
 
+# -- Passing Cloudflare's check with nothing attached --------------------------
+#
+# Measured on the live install, 22 Nov 2026, on copies of the Epic account's
+# profile (cookies intact), loading the store and reading only the X window's
+# title - so the reading attached nothing:
+#
+#   debugging port open, nothing connected          -> check passes in ~6 s
+#   bare CDP connection, Page.navigate only         -> passes
+#   bare CDP, plus Runtime.enable + Page.enable     -> passes
+#   Playwright, launched as a run is                -> never passes
+#   Playwright, connect_over_cdp to plain Chrome    -> never passes
+#   Playwright, no viewport, no --enable-automation -> never passes
+#
+# So it is not the DevTools protocol and not the domains Playwright enables on
+# the page: it is Playwright being attached at all - most likely its automatic
+# attachment to every frame, the challenge's own among them. And when the check
+# *does* pass naturally, Playwright attaching afterwards is fine: the same
+# probe then navigated to the wishlist under Playwright, signed in.
+#
+# So a session that declares a `warm_url` starts real Chrome itself, opens that
+# URL over a bare connection, lets the check finish (or not) on its own, and
+# only then connects Playwright. Nothing is solved, clicked or forged; the
+# check looks at a browser that genuinely has nothing unusual attached at that
+# moment, which is the un-driven sign-in window's principle applied to the
+# first page load of a run.
+
+_CHALLENGE_TITLE = re.compile(r"just a moment|one more step|attention required|security check", re.I)
+# How long the check gets to finish with nothing attached. It took 6-9 s when
+# measured; a check still up at this point wants a person, and the adapter's
+# own health check will say so.
+UNATTACHED_CHECK_S = 30.0
+
+
+def is_challenge_title(title: str | None) -> bool:
+    return bool(title) and bool(_CHALLENGE_TITLE.search(title))
+
+
+def read_devtools_port(profile_path: Path) -> int | None:
+    """The port Chrome chose for `--remote-debugging-port=0`, from its own file."""
+    try:
+        first = (profile_path / "DevToolsActivePort").read_text().splitlines()[0].strip()
+        return int(first)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _free_local_port() -> int:
+    """A port nothing on 127.0.0.1 is listening on right now."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _page_targets(port: int) -> list[dict]:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=2) as response:
+            return [t for t in json.load(response) if t.get("type") == "page"]
+    except Exception:
+        return []
+
+
+async def _start_attachable_chrome(executable: Path, profile_path: Path) -> tuple[subprocess.Popen, int]:
+    """Real Chrome on the profile with a local DevTools port and nothing attached.
+
+    The flags are the un-driven window's (sandbox, GPU, cookie store) plus the
+    port: the set the probe measured passing. None of Playwright's launch
+    scaffolding, because Playwright is not launching it.
+    """
+    (profile_path / "DevToolsActivePort").unlink(missing_ok=True)
+    # A port picked here and passed as a number - not `--remote-debugging-port=0`
+    # with Chrome choosing. Measured on the live install, same profile copy,
+    # minutes apart: with `=0` Cloudflare's check never passed (five runs, 30 s
+    # each); with a fixed number it passed in 8-9 s every time (five runs). Why
+    # is not established. The flags below are exactly the measured passing set:
+    # `--remote-debugging-address` and `--lang` were dropped with it, since
+    # neither was in the runs that passed.
+    port = _free_local_port()
+    args = [
+        str(executable),
+        f"--user-data-dir={profile_path}",
+        f"--remote-debugging-port={port}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-dev-shm-usage",
+        f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}",
+        "--window-position=0,0",
+    ]
+    if settings.in_container:
+        args += CONTAINER_ARGS
+    if NO_SANDBOX in LAUNCH_ARGS and NO_SANDBOX not in args:
+        args.append(NO_SANDBOX)
+    if settings.headless:
+        args.append("--headless=new")
+    if settings.browser_proxy:
+        args.append(f"--proxy-server={settings.browser_proxy}")
+    args.append("about:blank")
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + 20
+    while loop.time() < deadline:
+        if _page_targets(port):
+            return proc, port
+        if proc.poll() is not None:
+            break
+        await asyncio.sleep(0.3)
+    _stop_process(proc)
+    raise RuntimeError("Chrome did not open its DevTools port in time.")
+
+
+async def _pass_check_unattached(port: int, url: str) -> None:
+    """Open `url` over a bare connection and give any check time to finish."""
+    import websockets
+
+    targets = _page_targets(port)
+    if not targets:
+        return
+    loop = asyncio.get_event_loop()
+    started = loop.time()
+    seen_check = False
+    async with websockets.connect(targets[0]["webSocketDebuggerUrl"], max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Page.navigate", "params": {"url": url}}))
+        while loop.time() - started < UNATTACHED_CHECK_S:
+            await asyncio.sleep(1.5)
+            now = _page_targets(port)
+            title = now[0].get("title", "") if now else ""
+            target_url = now[0].get("url", "") if now else ""
+            if is_challenge_title(title):
+                seen_check = True
+                continue
+            # Loaded: a real title on an http page, not the blank tab or a URL
+            # standing in for a title mid-load.
+            if target_url.startswith("http") and title and not title.startswith("http"):
+                if seen_check:
+                    logger.info(
+                        "The security check at %s passed by itself after %.0fs, "
+                        "with nothing attached.", url, loop.time() - started,
+                    )
+                return
+    logger.info(
+        "The page at %s was still on a security check after %.0fs with nothing "
+        "attached; handing over to the run, which will report it.", url, UNATTACHED_CHECK_S,
+    )
+
+
+def _stop_process(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 @dataclass
 class Lease:
     """Who currently holds an account's profile, and since when."""
@@ -858,8 +991,14 @@ class BrowserManager:
         profile_path: Path,
         holder: str,
         wait_s: float = 0.0,
+        warm_url: str | None = None,
     ):
         """Open the account's profile and yield its context.
+
+        `warm_url`, when the adapter declares one, is opened before Playwright
+        is attached, so a Cloudflare check on it can pass with nothing attached
+        (see `_pass_check_unattached`). Needs real Chrome; without it the
+        session launches through Playwright as before.
 
         `holder` is a word for whoever is asking - "run" or "live" - and is
         what the other side is told when it cannot have the profile. `wait_s`
@@ -880,6 +1019,10 @@ class BrowserManager:
         entry.lease = Lease(holder=holder)
         playwright = await self._ensure_playwright()
         context: BrowserContext | None = None
+        # Set only for a warm session: Chrome started by Trove, Playwright
+        # connected to it rather than owning it.
+        process: subprocess.Popen | None = None
+        connected: Browser | None = None
         try:
             # Absolute, always. Real Chrome refuses a relative user-data-dir
             # with a modal dialog that presents only as a launch timeout.
@@ -887,6 +1030,16 @@ class BrowserManager:
             profile_path.mkdir(parents=True, exist_ok=True)
             quiet_profile(profile_path)
             channel = await resolve_channel(playwright, profile_path)
+            executable = find_chrome_executable() if warm_url and channel == "chrome" else None
+            if executable is not None:
+                process, port = await _start_attachable_chrome(executable, profile_path)
+                await _pass_check_unattached(port, warm_url)
+                connected = await playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+                context = connected.contexts[0]
+                context.set_default_timeout(settings.browser_timeout_ms)
+                entry.context = context
+                yield context
+                return
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_path),
                 headless=settings.headless,
@@ -911,11 +1064,22 @@ class BrowserManager:
         finally:
             entry.context = None
             entry.lease = None
-            if context is not None:
+            if connected is not None:
+                # Disconnect, then end Chrome ourselves: Playwright did not
+                # start it, so closing the connection leaves it running.
+                try:
+                    await connected.close()
+                except Exception as exc:  # pragma: no cover - teardown noise
+                    logger.debug("Disconnecting from %s: %s", account_id, exc)
+            elif context is not None:
                 try:
                     await context.close()
                 except Exception as exc:  # pragma: no cover - teardown noise
                     logger.debug("Closing the context for %s: %s", account_id, exc)
+            if process is not None:
+                # Off the event loop: Chrome flushes its cookies on the way out,
+                # and the session it just wrote is in that flush.
+                await asyncio.to_thread(_stop_process, process)
             entry.lock.release()
 
     async def open_local(
