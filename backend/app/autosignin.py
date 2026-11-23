@@ -277,6 +277,7 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
     typed_user = typed_password = typed_code = followed_frame = False
     code_judged_at = 0.0
     empty_reads = 0
+    gone_reads = 0
     while loop.time() < deadline:
         state = await cdp.inspect()
         title = state.get("title") or ""
@@ -340,10 +341,15 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
             await cdp.submit(state)
             typed_user = True
         elif (typed_password or typed_code) and not pw and not user and not code:
-            # The form is gone and nothing objected. Give the store a moment to
-            # finish its redirects, then let the session check say what it is.
+            # The form is gone and nothing objected - unless the next step is
+            # still loading. Humble's password step hands over to a new page
+            # for the authenticator code, read empty once before its field
+            # rendered (measured, 23 Nov 2026). So it has to stay gone.
+            gone_reads += 1
+            if gone_reads >= 2:
+                return Outcome(True, "The sign-in details went in and the form went away.")
             await asyncio.sleep(STEP_WAIT_S * 2)
-            return Outcome(True, "The sign-in details went in and the form went away.")
+            continue
         elif state.get("loginFrame") and not followed_frame:
             # GOG puts its form in an iframe from login.gog.com, which a page
             # script cannot reach into; the same page opened on its own can be.
