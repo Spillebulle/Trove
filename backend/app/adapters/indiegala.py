@@ -94,6 +94,7 @@ from playwright.async_api import Page, Response, TimeoutError as PlaywrightTimeo
 from ..browser import (
     CheckoutBlocked,
     NeedsAttention,
+    SignedOut,
     StoreChallenged,
     StoreUnavailable,
     refusal_reason,
@@ -175,12 +176,13 @@ DOWNLOAD_SECTION = [
     '#download-section',
 ]
 
-# UNVERIFIED: the signed-in claim control. Signed out the button is
-# `a.developer-product-download-button-login` "ADD TO LIBRARY"; the signed-in
-# one is assumed to sit in the same container without the `-login` suffix.
-# Scoped to the Download section, never page-wide, so a "Get" in a carousel
-# or a store link cannot be matched.
+# MEASURED signed in, 23 Nov 2026: `<div class="developer-product-download-
+# button-cont"><button id="loginBeforeAddToLibrary" onclick="addToLibrary(this,
+# event)">ADD TO LIBRARY</button></div>` - the same button whether or not the
+# account owns the game. Scoped to the Download section, never page-wide, so
+# a "Get" in a carousel or a store link cannot be matched.
 ADD_TO_LIBRARY = [
+    '.developer-product-download-button-cont button[onclick*="addToLibrary"]',
     '.developer-product-download-button-cont a:not(.developer-product-download-button-login)',
     '.developer-product-download-button-cont button',
     '.developer-product-download a:has-text("Add to library")',
@@ -188,15 +190,22 @@ ADD_TO_LIBRARY = [
     '.developer-product-download a:has-text("Get")',
 ]
 
-# UNVERIFIED: the account already has it. Loose on purpose; no marker is
-# "could not tell", never "not owned".
-OWNED = [
-    '.developer-product-download :text-matches("already in your library", "i")',
-    '.developer-product-download :text-matches("in your library", "i")',
-    '.developer-product-download :text-matches("added to your library", "i")',
-    '.developer-product-download a:has-text("Go to library")',
-    '.developer-product-download a[href*="/library"]',
-]
+# MEASURED from the page's own `addToLibrary` (23 Nov 2026): **a freebie page
+# never says whether the account owns the game.** The button reads ADD TO
+# LIBRARY either way, and the help text under it always carries two links to
+# `www.indiegala.com/library` - which the first, unverified version of this
+# list matched (`a[href*="/library"]`), so every freebie read "already owned"
+# and nothing was ever claimed. Ownership is learnt only by pressing the
+# button: it POSTs `/developers/ajax/add-to-library/<uuid>/<slug>/freebies`
+# and the JSON `status` is `ok` (added now), `added` (already had it),
+# `login` (signed out) or anything else (an error). The press is harmless for
+# an owned game. After `ok` the button turns `-button-success` "Added!" for
+# 2 s; after `ok` or `added` the button is replaced by a library link *inside
+# the button's container* - which is what these two read, scoped so the help
+# text's links can never match again.
+ADD_TO_LIBRARY_REPLY = "/developers/ajax/add-to-library/"
+ADDED_NOW = ['.developer-product-download-button-success']
+OWNED = ['.developer-product-download-button-cont a[href*="indiegala.com/library"]']
 
 # UNVERIFIED: an opt-in the claim would depend on. Trove never ticks one; it
 # reports the freebie as not eligible and the person decides.
@@ -457,11 +466,11 @@ class IndieGalaAdapter(BaseAdapter):
             await _goto(page, offer.url)
         except PlaywrightTimeout:
             return None
-        if await _first_visible(page, OWNED, timeout_ms=3000):
+        if await _first_visible(page, OWNED, timeout_ms=1000):
             return True
-        # No marker is "could not tell", never "not owned": the signed-in
-        # wording is unverified and a slow render must not teach the ledger a
-        # lie.
+        # A freebie page does not say whether the account owns the game (see
+        # OWNED), so this is nearly always "could not tell" - never "not
+        # owned". The claim's press is what finds out, harmlessly.
         return None
 
     # ── Claiming ─────────────────────────────────────────────────────────
@@ -497,9 +506,6 @@ class IndieGalaAdapter(BaseAdapter):
             ) from None
 
         await self._guard(page, offer)
-
-        if await _first_visible(page, OWNED, timeout_ms=2500):
-            return ClaimResult(outcome="already_owned", detail="Already in your library.")
 
         section = await _first_visible(page, DOWNLOAD_SECTION, timeout_ms=5000)
         if section is None:
@@ -551,29 +557,50 @@ class IndieGalaAdapter(BaseAdapter):
                 await self._shot(page, offer, "not-free-control"),
             )
 
-        # One click, once. Everything after this only reads.
+        # One click, once. Everything after this only reads. The store's own
+        # answer to the click is the verdict (see OWNED); the page is the
+        # fallback for a reply that could not be read.
         logger.info("IndieGala: adding %r to the library.", offer.title)
+        status: str | None = None
         try:
-            await control.click(timeout=6000)
+            async with page.expect_response(
+                lambda r: ADD_TO_LIBRARY_REPLY in r.url, timeout=15000
+            ) as reply:
+                await control.click(timeout=6000)
+            try:
+                status = str((await (await reply.value).json()).get("status") or "")
+            except Exception as exc:
+                logger.info("IndieGala: the add-to-library reply was not JSON: %s", exc)
         except PlaywrightTimeout:
             await self._guard(page, offer)
+            if not await _first_visible(page, ADDED_NOW + OWNED, timeout_ms=500):
+                raise NeedsAttention(
+                    "The add-to-library control could not be clicked, or "
+                    "IndieGala did not answer it.",
+                    await self._shot(page, offer, "click-blocked"),
+                ) from None
+        if status is not None:
+            logger.info("IndieGala: add-to-library for %r answered %r.", offer.title, status)
+            verdict = reply_verdict(status)
+            if verdict == "claimed":
+                return ClaimResult(outcome="claimed", detail="Added to your IndieGala library.")
+            if verdict == "already_owned":
+                return ClaimResult(outcome="already_owned", detail="Already in your IndieGala library.")
+            if verdict == "signed_out":
+                raise SignedOut(
+                    'IndieGala answered the claim with "login needed": this '
+                    "account is signed out.",
+                    await self._shot(page, offer, "login-needed"),
+                )
             raise NeedsAttention(
-                "The add-to-library control could not be clicked.",
-                await self._shot(page, offer, "click-blocked"),
-            ) from None
+                f"IndieGala answered the claim with {status!r} rather than "
+                "adding it. One attempt only; check the account.",
+                await self._shot(page, offer, "claim-error"),
+            )
 
         outcome = await self._read_outcome(page, offer)
         if outcome is not None:
             return outcome
-
-        # Ground truth: reload and ask the page.
-        try:
-            await _goto(page, offer.url)
-            if await _first_visible(page, OWNED, timeout_ms=6000):
-                logger.info("IndieGala: %r is now in the library.", offer.title)
-                return ClaimResult(outcome="claimed", detail="Added to your IndieGala library.")
-        except PlaywrightTimeout:
-            pass
         raise NeedsAttention(
             "The add-to-library control was clicked but Trove could not confirm "
             "the game landed in the library. Check the account before Trove "
@@ -603,9 +630,14 @@ class IndieGalaAdapter(BaseAdapter):
                     key_code=code,
                     key_store=key_store,
                 )
-            if await _first_visible(page, OWNED, timeout_ms=400):
-                logger.info("IndieGala: %r claimed (page says so).", offer.title)
+            if await _first_visible(page, ADDED_NOW, timeout_ms=400):
+                logger.info("IndieGala: %r claimed (page says Added!).", offer.title)
                 return ClaimResult(outcome="claimed", detail="Added to your IndieGala library.")
+            # The library link with no "Added!" first is the `added` answer:
+            # the account had it already.
+            if await _first_visible(page, OWNED, timeout_ms=400):
+                logger.info("IndieGala: %r was already in the library (page says so).", offer.title)
+                return ClaimResult(outcome="already_owned", detail="Already in your IndieGala library.")
             if await _first_visible(page, CLAIM_ERROR, timeout_ms=200):
                 raise NeedsAttention(
                     "IndieGala answered the claim with an error. One attempt "
@@ -675,6 +707,13 @@ async def _label_and_href(control) -> tuple[str, str]:
     except Exception:
         pass
     return label, href
+
+
+def reply_verdict(status: str) -> str:
+    """What IndieGala's add-to-library `status` means (its own handler, read)."""
+    return {"ok": "claimed", "added": "already_owned", "login": "signed_out"}.get(
+        (status or "").strip().lower(), "error"
+    )
 
 
 def _is_free_control(label: str, href: str, page_url: str) -> bool:

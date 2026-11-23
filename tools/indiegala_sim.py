@@ -216,13 +216,52 @@ class FakeLoc:
         self.page.clicks.append(self.sel)
 
 
+class FakeReply:
+    def __init__(self, status) -> None:
+        self.status = status
+
+    async def json(self):
+        if isinstance(self.status, Exception):
+            raise self.status
+        return {"status": self.status}
+
+
+class FakeExpect:
+    """`page.expect_response`: the add-to-library POST's reply, or a timeout."""
+
+    def __init__(self, page: "FakePage", predicate) -> None:
+        self.page, self.predicate = page, predicate
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        if exc[0] is not None:
+            return False
+        if self.page.reply is None:
+            raise ig.PlaywrightTimeout("no reply")
+        url = "https://freebies.indiegala.com" + ig.ADD_TO_LIBRARY_REPLY + "uuid/slug/freebies"
+        assert self.predicate(type("R", (), {"url": url})())
+        return False
+
+    @property
+    def value(self):
+        async def _v():
+            return FakeReply(self.page.reply)
+        return _v()
+
+
 class FakePage:
-    def __init__(self, visible: set[str], texts=None, hrefs=None, url="https://freebies.indiegala.com/x") -> None:
+    def __init__(self, visible: set[str], texts=None, hrefs=None, url="https://freebies.indiegala.com/x", reply=None) -> None:
         self.visible = visible
         self.texts = texts or {}
         self.hrefs = hrefs or {}
         self.url = url
+        self.reply = reply
         self.clicks: list[str] = []
+
+    def expect_response(self, predicate, timeout=None):
+        return FakeExpect(self, predicate)
 
     def locator(self, sel: str) -> FakeLoc:
         base = sel.split(" >> visible=true")[0]
@@ -268,7 +307,21 @@ async def claim_checks() -> None:
         "needs_attention",
     )
     check("a challenge goes to the un-driven window", await run(FakePage({ig.CHALLENGE[0]})), "checkout_blocked")
-    check("owned already", await run(FakePage({section, ig.OWNED[0]})), ("already_owned", None))
+    # The measured page: a button, and help text linking to the library. That
+    # link is NOT ownership (it fooled the first version into "owned" for all).
+    help_link = '.developer-product-download a[href*="/library"]'
+    for status, want in (("ok", ("claimed", None)), ("added", ("already_owned", None))):
+        fake = FakePage({section, control, help_link}, texts={control: "ADD TO LIBRARY"}, reply=status)
+        check(f"reply {status!r} -> {want[0]}", await run(fake), want)
+        check(f"reply {status!r}: one click", fake.clicks, [control])
+    fake = FakePage({section, control}, texts={control: "ADD TO LIBRARY"}, reply="login")
+    check("reply 'login' is signed out", await run(fake) == "needs_attention", True)
+    fake = FakePage({section, control}, texts={control: "ADD TO LIBRARY"}, reply="error")
+    check("any other reply stops", await run(fake), "needs_attention")
+    check("the help text's library link is not ownership", help_link in ig.OWNED, False)
+    check("the measured button is the first control", ig.ADD_TO_LIBRARY[0].endswith('button[onclick*="addToLibrary"]'), True)
+    check("verdicts", [ig.reply_verdict(x) for x in ("ok", "added", "login", "", "nope")],
+          ["claimed", "already_owned", "signed_out", "error", "error"])
     check("no Download section stops", await run(FakePage(set())), "needs_attention")
     fake = FakePage({section, ig.NEWSLETTER[0], control}, texts={control: "ADD TO LIBRARY"})
     check("a newsletter opt-in is not_eligible", await run(fake), ("not_eligible", ig.REASON_NEWSLETTER))
