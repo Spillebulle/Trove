@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.51. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.52. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -196,6 +196,17 @@ a chooser - "Send code to <email>" or "Use your Authenticator App (TOTP)" -
 where the authenticator is pressed and the email code never is. The attempt
 ends by loading the store's own page so the login host's handover can set
 the store's session before Chrome closes.
+
+**Fanatical's `/account/login` page is broken for every browser (0.1.52).**
+Its sign-in component remounts about eight times a second - ~200 "Sign In -
+Change template - login" tracking events in 25 s, identical on a fresh
+profile, a copy of the account's, a copy with site storage cleared, and full
+screen - so typed details are wiped before anything is sent, and the network
+log of a full attempt shows **no login request at all**. That was the silent
+failure. The header's "Sign in" button opens the same form as a pop-up that
+mounts once. So Fanatical's `signin_url` is the store front, and adapters
+may declare `signin_opener` (a regex for the store's own sign-in button),
+which the automatic sign-in presses when it finds no form.
 
 ## Design
 

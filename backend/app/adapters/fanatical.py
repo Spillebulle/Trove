@@ -586,7 +586,16 @@ class FanaticalAdapter(BaseAdapter):
     store = "fanatical"
     display_name = "Fanatical"
     login_url = f"{STORE_ROOT}/{LOCALE}/"
-    signin_url = f"{STORE_ROOT}/{LOCALE}/account/login"
+    # The store front, not `/account/login`. That page remounts its sign-in
+    # form about eight times a second for any browser - measured in the
+    # container, 23 Nov 2026: ~200 "Sign In - Change template - login" events
+    # in 25 s on a fresh profile, a copy of the account's, a copy with its
+    # storage cleared, and full screen alike - so anything typed into it is
+    # wiped before it can be sent, and no login request is ever made. The
+    # header's "Sign in" button opens the same form as a pop-up that mounts
+    # once and stays (one event in 25 s, password field visible).
+    signin_url = f"{STORE_ROOT}/{LOCALE}/"
+    signin_opener = r"^\s*sign in\s*$"
     # No sign_in_forms: the form is known from the bundle (email + password on
     # one page, reCAPTCHA v3, "remember me"), but nobody has looked at it.
     sign_in_note = (

@@ -247,6 +247,10 @@ class BaseAdapter(ABC):
     # the session launches through Playwright as it always has. Set it only for
     # a store whose check has been seen to need it.
     warm_url: str = ""
+    # A regular expression for the store's own "Sign in" button, for a store
+    # whose sign-in form is a pop-up on the page rather than a page of its own.
+    # The automatic sign-in presses it when it finds no form (`autosignin`).
+    signin_opener: str = ""
 
     # The shapes this store's login form comes in, for the "Sign in for me"
     # button - one entry per shape, in the order the interface offers them.

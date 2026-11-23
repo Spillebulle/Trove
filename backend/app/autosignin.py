@@ -200,6 +200,15 @@ class _Cdp:
         else:
             await self.press_enter()
 
+    async def tag_opener(self, pattern: str) -> bool:
+        """Tag the first visible button or link whose text matches `pattern`."""
+        return bool(await self.evaluate(
+            "(() => { const re = new RegExp(" + json.dumps(pattern) + ", 'i');"
+            " const b = [...document.querySelectorAll('button, a, [role=button]')]"
+            ".find(e => e.getClientRects().length && re.test((e.innerText || '').trim()));"
+            " if (b) b.setAttribute('data-trove-auto', 'opener'); return !!b; })()"
+        ))
+
     async def click_tagged(self, what: str) -> None:
         """A real (trusted) mouse click in the middle of the tagged element."""
         box = await self.evaluate(
@@ -245,6 +254,7 @@ async def attempt(
     totp=None,
     store_name: str = "the store",
     landing_url: str | None = None,
+    opener: str = "",
 ) -> Outcome:
     """One automatic sign-in on this profile, starting at `url`.
 
@@ -265,7 +275,7 @@ async def attempt(
             await cdp.call("Page.bringToFront")
             await cdp.navigate(url)
             await _wait_for_page(port)
-            outcome = await _drive(cdp, port, email, password, totp, store_name)
+            outcome = await _drive(cdp, port, email, password, totp, store_name, opener)
             if outcome.submitted and landing_url:
                 # Finish on the store's own page before the browser closes. A
                 # store whose login lives on another host (Humble's
@@ -278,10 +288,12 @@ async def attempt(
             return outcome
 
 
-async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_name: str) -> Outcome:
+async def _drive(
+    cdp: _Cdp, port: int, email: str, password: str, totp, store_name: str, opener: str = ""
+) -> Outcome:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + ATTEMPT_S
-    typed_user = typed_password = typed_code = followed_frame = chose_app = False
+    typed_user = typed_password = typed_code = followed_frame = chose_app = opened = False
     code_judged_at = 0.0
     empty_reads = 0
     gone_reads = 0
@@ -371,6 +383,10 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
                 return Outcome(True, "The sign-in details went in and the form went away.")
             await asyncio.sleep(STEP_WAIT_S * 2)
             continue
+        elif opener and not opened and not (typed_user or typed_password) and await cdp.tag_opener(opener):
+            # The store's sign-in is a pop-up behind its own button.
+            await cdp.click_tagged("opener")
+            opened = True
         elif state.get("loginFrame") and not followed_frame:
             # GOG puts its form in an iframe from login.gog.com, which a page
             # script cannot reach into; the same page opened on its own can be.

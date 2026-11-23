@@ -64,6 +64,10 @@ PAGES = {
     "/d/code": lambda q: page("""<form action="/d/done"><label>Security code <input name="otp" autocomplete="one-time-code"></label>
         <button>Verify</button></form>"""),
     "/e/login": lambda q: page(f"<h1>Welcome</h1>{FOOTER}"),
+    "/f/login": lambda q: page("""<nav><button id=opener>Sign in</button></nav><div id=modal hidden>
+        <form action="/f/done"><input type="email" name="email"><input type="password" name="password">
+        <button>Sign in</button></form></div>
+        <script>const b = document.getElementById('opener'); b.onclick = () => { document.getElementById('modal').hidden = false; b.remove(); }</script>"""),
 }
 
 
@@ -100,11 +104,12 @@ def hits(path: str) -> list[dict]:
     return [q for p, q in received if p == path]
 
 
-async def run(name: str, totp=None) -> autosignin.Outcome:
+async def run(name: str, totp=None, opener: str = "") -> autosignin.Outcome:
     received.clear()
     profile = Path(tempfile.mkdtemp()) / "profile"
     outcome = await autosignin.attempt(
-        900, profile, f"{BASE}/{name}/login", "person@example.com", "s3cret-pass", totp=totp, store_name="Fake"
+        900, profile, f"{BASE}/{name}/login", "person@example.com", "s3cret-pass", totp=totp, store_name="Fake",
+        opener=opener,
     )
     print(f"{name}: submitted={outcome.submitted} pause={outcome.pause} | {outcome.sentence}", flush=True)
     return outcome
@@ -134,6 +139,11 @@ async def main() -> None:
     o = await run("e")
     check("e: no form -> gives up", not o.submitted and "could not find" in o.sentence)
     check("e: newsletter never typed into", not hits("/newsletter"))
+
+    o = await run("f", opener=r"^\s*sign in\s*$")
+    check("f: the store's Sign in button opens the pop-up form", bool(hits("/f/done")) and hits("/f/done")[0].get("password") == ["s3cret-pass"])
+    o = await run("f")
+    check("f: without an opener nothing is pressed", not hits("/f/done") and not o.submitted)
     await browser.manager.stop()
 
 
