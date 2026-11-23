@@ -178,6 +178,8 @@ class ClaimRead(Read):
     # Whether there is a key to reveal, never the key.
     has_key: bool
     key_store: str | None
+    # When the person marked the key redeemed; None while it is still to do.
+    key_redeemed_at: datetime | None = None
     screenshot: str | None
     created_at: datetime | None
     # How many rows this one stands for. The ledger is still one row per
@@ -186,6 +188,10 @@ class ClaimRead(Read):
     # "not claimed yet" about the same DLC eight times should say so once and
     # count. 1 means it is the only row there is.
     attempts: int = 1
+
+
+class KeyRedeemed(BaseModel):
+    redeemed: bool
 
 
 class ClaimKey(BaseModel):

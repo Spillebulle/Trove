@@ -104,3 +104,18 @@ jobs:
 
       - name: Notifications link back to Trove
         run: python tools/notify_link_sim.py
+
+      - name: Keys to redeem - the list, the mark, and who may reveal
+        run: python tools/redeem_sim.py
+
+      - name: IndieGala - the freebies parser and its fail-safe claim
+        run: python tools/indiegala_sim.py
+
+      - name: Ubisoft - giveaways from the store index, never a free weekend
+        run: python tools/ubisoft_sim.py
+
+      - name: Humble Bundle - free products, Choice for a subscriber, a zero total
+        run: python tools/humble_sim.py
+
+      - name: Fanatical - giveaways only, and a cart that must total zero
+        run: python tools/fanatical_sim.py

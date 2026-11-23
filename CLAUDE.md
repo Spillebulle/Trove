@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.41. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.42. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -954,7 +954,7 @@ Four concerns, kept thin, mirroring HomeLab's split. Where each one lives:
 |---|---|
 | HTTP/CRUD | `routers/accounts.py`, `routers/ledger.py`, `routers/settings.py`, `routers/live.py`, `main.py` |
 | Scheduler | `scheduler.py`, and `runner.py` for what one run does |
-| Store adapters | `adapters/base.py` (the contract), `adapters/epic.py`, `adapters/prime.py`, `adapters/__init__.py` (`ADAPTER_MAP`) |
+| Store adapters | `adapters/base.py` (the contract), one module per store (`epic`, `gog`, `steam`, `itchio`, `prime`, `indiegala`, `ubisoft`, `fanatical`, `humble`), `adapters/__init__.py` (`ADAPTER_MAP`) |
 | Ledger | `models.py`, and the pages that are views of it |
 | The browser | `browser.py` (profiles and the lock), `live.py` (the screencast) |
 
@@ -1546,8 +1546,114 @@ but the ledger will call it a game.
   `/login/`; `#account_pulldown` (the signed-in discriminator) appears nowhere
   signed-out. The owned marker and the post-click confirmation wording could
   not be measured without a session/promo — see "Written and NOT verified".
-- **EA (EA app / Origin)** and **Ubisoft Connect** — infrequent giveaways; worth
-  an adapter only after the first two work end to end.
+- **EA app** and **Microsoft Store** — deliberately not built. EA's own free
+  game programme ended years ago and its freebies arrive through Prime Gaming;
+  Microsoft's "free" is free-to-play or Free Play Days (trials). Rockstar and
+  Battle.net launcher giveaways are too rare, and Alienware Arena's key
+  giveaways run on points and heavy bot checks.
+
+### The third wave (0.1.42): IndieGala, Ubisoft, Fanatical, Humble Bundle
+
+Each was measured signed-out on 23 Nov 2026 with plain httpx at >= 3 s
+between requests. There is **no account for any of them here**, so every
+signed-in half is written from the store's own JS bundle or markup, fails safe
+(unknown ownership is `None`, an unrecognised page is `NeedsAttention` with a
+screenshot, a missing control is `not_eligible` with a `reason_code`), and logs
+what it found. The first signed-in run on each is its measurement: fix the
+selector tables at the top of the module from that run's log. Two rules all
+four share: **a newsletter or marketing opt-in is never ticked** (a giveaway
+that needs one is `not_eligible`/`newsletter_optin` or `newsletter_required`),
+and **an order is placed only at a total read as zero**. All four stores'
+terms forbid automated access in some wording, and each blurb and
+"Accepting the risk" requirement says so.
+
+- **IndieGala** (`adapters/indiegala.py`). `freebies.indiegala.com` (the
+  `www.indiegala.com/freebies` path is a 404) is a standing, server-rendered
+  page of free DRM-free games added to the IndieGala library: 8 live on the day,
+  a new one weekly, old ones stay (one from 2019), **no end dates** - so
+  `UNLISTED_AFTER` decides when one is over. Cells are `div.products-col-inner`;
+  the identity is the **UUID in the cover path**
+  (`/imgs/devs/freebies/products/<UUID>/prodmain/…`), confirmed against the
+  product page's `gala_page_id`, never the slug. Every page carries inline
+  `const userIsLogged = false;` signed out, which `health` reads. Signed out,
+  the product's Download section holds only
+  `a.developer-product-download-button-login` "ADD TO LIBRARY" (a login
+  redirect). Login is `www.indiegala.com/login`: email, password and a reCAPTCHA
+  v2 checkbox, no `<form>`, no remember-me - so the sign-in form types email,
+  Tab, password and **stops**: the person ticks the box. Capped at 10 per run.
+  No simple-icons mark; the badge is text.
+- **Ubisoft** (`adapters/ubisoft.py`). Discovery is the store's own **Algolia
+  index** (`XELY3U4LOD`, `production__us_ubisoft__products__en_US__best_sellers`,
+  public search-only key read off `window.SitePreferences` on
+  `store.ubisoft.com/us/free-games` each run), filtered on
+  **`Free_offer == "giveaway"`** - the exact test the store's own tile renderer
+  uses. `price.USD == 0` is useless (free-to-play, demos, unpriced coming-soon
+  titles), the free-games page itself showed only `freeplay` tiles, and the
+  **regional index has no `Free_offer` facet**, so discovery always asks the US
+  one. No giveaway on the day (`demo: 22, freeplay: 9`). **The big finding:**
+  store product pages now 301 to `www.ubisoft.com/<locale>/games/<slug>`, whose
+  giveaway CTA ("Get it now", `offerType: GIVEAWAY`) opens
+  `connect.ubisoft.com/n/game-page/v1?…&free-product-id=…` - a launcher page for
+  the **Ubisoft Connect PC app** (`uplay://`). So on that page the adapter clicks
+  nothing and records `not_eligible`/`desktop_client`; Trove's value for Ubisoft
+  is mostly finding the giveaway and telling the person. The older store page's
+  browser claim (`#add-to-cart.giveaway`, "ADD TO MY GAMES",
+  `Product-ActivateFreeOfferGame`) is kept, money-guarded, unseen live. The
+  signed-out session marker is `window.User = {"isLoggedIn":false,…}`.
+- **Fanatical** (`adapters/fanatical.py`). Free Steam-key giveaways only.
+  Discovery: `GET /api/algolia/key` mints a per-visitor secured key (it embeds
+  `included_regions:<caller's country>`, so results are region-scoped for free),
+  then `POST w2m9492ddv-dsn.algolia.net/1/indexes/fan/query` with
+  `filters=giveaway = 1` (numeric; `giveaway:true` matches nothing). Zero live on
+  the day out of 16 585 records. **A zero price is not a giveaway**: 72 records
+  at `price.USD = 0` were unreleased, free-to-play or a prize draw. "Free with
+  purchase" is excluded twice (the slug against `/api/all-promotions/en`'s
+  `freeProducts` tiers, all of which need a minimum spend, and the name).
+  `/api/products-group/<slug>/en` answers 403 to Trove's UA; the claim reads it
+  from inside the signed-in page. The claim (from the bundle): cart, the upsell
+  page's "Skip and Proceed To Checkout" (`#api-button`, the only thing pressed
+  there), the store's zero-total `giveaway-order`, then "Reveal Key" on the
+  order page. **Money guard:** the cart must be empty (or hold only this offer)
+  before adding and exactly this one item at zero after, or nothing is pressed;
+  the person's items are never removed. The checkout's **pre-ticked** "Sign me
+  up for gaming deals" box is unticked, and the run stops if it will not untick.
+  Fanatical's terms (section 3) forbid VPNs or an IP in another country - which
+  is what a foreign `BROWSER_PROXY` would be - and it may clear keys 180 days
+  after purchase, which is why the ledger keeping them matters. No simple-icons
+  mark.
+- **Humble Bundle** (`adapters/humble.py`), one adapter with
+  `discovery_needs_session` for two things behind one login: store giveaways
+  and **Humble Choice for a subscriber**. The site is Next.js; data rides in RSC
+  flight chunks (`self.__next_f.push`), not an API, and the old
+  `/store/api/search` is a **Cloudflare 403** to any plain client. Store
+  discovery reads the products on `/store`, `/on-sale` and `/` (438 on the day,
+  none free; `centAmount` can be a float, so zero is `< 0.5`; prices are
+  geolocated): current price 0 and (base price > 0 or `isSale`). A giveaway
+  featured on none of those pages is missed. `list_free_offers()` really
+  returns them sessionlessly; `discover_in_session` returns those (15-minute
+  cache) plus this month's Choice games from `/membership`'s carousel
+  (`productType: humble-choice`, `deliveryMethods`; `external_key` items such as
+  IGN Plus skipped). Session test: `GET /api/auth/session-status` answers
+  `{"status":"anonymous"}` signed out, and Humble's own code treats anything
+  else as signed in. Login is Ory Kratos at `auth.humblebundle.com`,
+  identifier-first. Store orders need the checkout total read zero **twice**
+  right before the one click, and a recurring-charge mention stops it;
+  pay-early / skip / pause controls are never pressed. Revealing a Humble key
+  binds it to the account and cannot be undone - stated in the blurb. Keys map
+  delivery to `key_store` (blizzard -> `battlenet`). The sim caught "Key will be
+  redeemed on Battle.net" matching the "Redeemed on {provider}" done-state,
+  which would have recorded Battle.net games as already owned.
+
+**Keys to redeem (0.1.42).** Fanatical, Humble, Prime and some IndieGala
+freebies hand out keys. Trove still never redeems one: the Keys page
+(`pages/Keys.tsx`, `GET /api/redeem`) is a to-do list, each key revealed only by
+a signed-in session (the `/claims/{id}/key` rule is unchanged), with a link
+from `lib/redeem.ts` that arrives prefilled where the store allows it (Steam
+`account/registerkey?key=`, GOG `/redeem/<code>`) and otherwise copies the key
+and opens the redeem page or says which launcher menu to use. "Mark redeemed"
+is the person's word (`Claim.key_redeemed_at`), not a check. Automatic Steam
+redemption is possible (ArchiSteamFarm does it) but is a separate, deliberate
+feature: Steam rate-limits failed activations.
 
 One store, one account, one full loop is done. The rule was that **a second
 adapter waits** until Epic's checkout claimed something real, because a second
@@ -1629,6 +1735,11 @@ backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenge
 backend/.venv/Scripts/python tools/api_key_sim.py      # keys, scopes, the line
 backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py  # the warm session, no cookie drop
 backend/.venv/Scripts/python tools/notify_link_sim.py  # messages link to the account
+backend/.venv/Scripts/python tools/redeem_sim.py       # the keys page
+backend/.venv/Scripts/python tools/indiegala_sim.py    # IndieGala freebies
+backend/.venv/Scripts/python tools/ubisoft_sim.py      # Ubisoft giveaways
+backend/.venv/Scripts/python tools/fanatical_sim.py    # Fanatical, zero-total cart
+backend/.venv/Scripts/python tools/humble_sim.py       # Humble store + Choice
 ```
 
 When there is a real test suite, put how to run a single test here.

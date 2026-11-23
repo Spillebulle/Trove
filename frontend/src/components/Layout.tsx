@@ -29,6 +29,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Clock,
   Gift,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -57,6 +58,7 @@ const NAV_GROUPS: Array<{ eyebrow?: string; items: NavItem[] }> = [
       { to: '/accounts', label: 'Accounts', icon: Users },
       { to: '/offers', label: 'Free now', icon: Gift },
       { to: '/ledger', label: 'Ledger', icon: Clock },
+      { to: '/keys', label: 'Keys', icon: KeyRound },
     ],
   },
 ]

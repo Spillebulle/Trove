@@ -295,6 +295,10 @@ class Claim(Base):
     key_code = Column(Text, nullable=True)
     # Which store the key is redeemed on, when that is not the claiming store.
     key_store = Column(String(40), nullable=True)
+    # When the person said they redeemed the key. Trove never redeems a key
+    # itself, so this is their word, not a fact Trove checked; it only moves
+    # the key off the "still to redeem" list.
+    key_redeemed_at = Column(DateTime, nullable=True)
 
     # Relative to the screenshots directory. Present on `needs_attention` and
     # usually on `failed`: the evidence for what the page was doing.

@@ -8,24 +8,33 @@ account, one full loop, proven, before a second adapter existed. That loop
 closed on 20 Aug 2026 (a real game claimed end to end), and the second wave
 followed: GOG, Steam (only the rare "free to keep" promotions), Prime Gaming
 (the one store whose discovery needs a session, which is why the contract
-carries `discovery_needs_session`), and itch.io. Each module's docstring says
+carries `discovery_needs_session`), and itch.io. The third wave (0.1.42) is
+IndieGala, Ubisoft, Fanatical and Humble Bundle. Each module's docstring says
 what its store does and does not get; nothing here repeats it.
 """
 from __future__ import annotations
 
 from .base import BaseAdapter, ClaimResult, FreeOffer, Requirement
 from .epic import EpicAdapter
+from .fanatical import FanaticalAdapter
 from .gog import GogAdapter
+from .humble import HumbleAdapter
+from .indiegala import IndieGalaAdapter
 from .itchio import ItchAdapter
 from .prime import PrimeAdapter
 from .steam import SteamAdapter
+from .ubisoft import UbisoftAdapter
 
 ADAPTER_MAP: dict[str, type[BaseAdapter]] = {
     "epic": EpicAdapter,
+    "fanatical": FanaticalAdapter,
     "gog": GogAdapter,
+    "humble": HumbleAdapter,
+    "indiegala": IndieGalaAdapter,
     "itchio": ItchAdapter,
     "prime": PrimeAdapter,
     "steam": SteamAdapter,
+    "ubisoft": UbisoftAdapter,
 }
 
 __all__ = [

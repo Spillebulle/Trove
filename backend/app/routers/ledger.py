@@ -22,7 +22,7 @@ from ..crypto import decrypt
 from ..db import get_db
 from ..models import Account, Claim, Offer, Run
 from ..runner import discover, discover_upcoming
-from ..schemas import ClaimKey, ClaimRead, OfferRead, RunRead, Summary
+from ..schemas import ClaimKey, ClaimRead, KeyRedeemed, OfferRead, RunRead, Summary
 from ..timeutil import as_utc, utcnow
 
 logger = logging.getLogger(__name__)
@@ -315,6 +315,7 @@ def _serialise_claim(claim: Claim, label: str | None, attempts: int = 1) -> Clai
         detail=claim.detail,
         has_key=bool(claim.key_code),
         key_store=claim.key_store,
+        key_redeemed_at=claim.key_redeemed_at,
         screenshot=claim.screenshot,
         created_at=claim.created_at,
         attempts=attempts,
@@ -418,6 +419,43 @@ def reveal_key(claim_id: int, db: Session = Depends(get_db)) -> ClaimKey:
             "since it was stored.",
         )
     return ClaimKey(key_code=value, key_store=claim.key_store)
+
+
+# ── Keys to redeem ──────────────────────────────────────────────────────────
+
+
+@router.get("/redeem", response_model=list[ClaimRead])
+def keys_to_redeem(db: Session = Depends(get_db)) -> list[ClaimRead]:
+    """Every claim that handed out a key, still-to-redeem first.
+
+    The list never carries a key - only `has_key` - for the same reason the
+    ledger does not: the value is one request of its own (`/claims/{id}/key`),
+    which a session must make and an API key cannot.
+    """
+    rows = (
+        db.query(Claim)
+        .filter(Claim.key_code.isnot(None))
+        .order_by(Claim.key_redeemed_at.isnot(None), Claim.created_at.desc(), Claim.id.desc())
+        .all()
+    )
+    labels = {a.id: a.label for a in db.query(Account).all()}
+    return [_serialise_claim(c, labels.get(c.account_id)) for c in rows]
+
+
+@router.post("/claims/{claim_id}/redeemed", response_model=ClaimRead)
+def mark_redeemed(claim_id: int, body: KeyRedeemed, db: Session = Depends(get_db)) -> ClaimRead:
+    """Record that the person redeemed (or has not yet redeemed) a key.
+
+    Their word, not a check: Trove never redeems a key and cannot see whether
+    a store accepted one. Marking reveals nothing, so a key may do it too.
+    """
+    claim = db.get(Claim, claim_id)
+    if claim is None or not claim.key_code:
+        raise HTTPException(404, "This claim has no key.")
+    claim.key_redeemed_at = utcnow() if body.redeemed else None
+    db.commit()
+    account = db.get(Account, claim.account_id) if claim.account_id else None
+    return _serialise_claim(claim, account.label if account else None)
 
 
 # ── Runs ────────────────────────────────────────────────────────────────────

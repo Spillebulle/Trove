@@ -97,6 +97,8 @@ def _migrate(engine) -> None:
             # before this stay NULL, which reads as "no particular reason
             # recorded" - the interface then says what it always said.
             "reason_code": "VARCHAR(40)",
+            # 0.1.42: the redeem page's "I have redeemed this" mark.
+            "key_redeemed_at": "DATETIME",
         },
         "offers": {
             # When the offer first appeared in the free list, which is what

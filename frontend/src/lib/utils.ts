@@ -54,6 +54,27 @@ export const BLOCKED_LABEL: Record<string, string> = {
   // library keeps. An ordinary outcome there, not a fault.
   download_only: 'Download only',
   browser_only: 'Browser only',
+  // Third wave (0.1.42). Each is a settled fact a run cannot change.
+  no_claim_control: 'No claim button',
+  newsletter_optin: 'Needs newsletter opt-in',
+  account_level: 'Account level too low',
+  // Ubisoft: the giveaway is claimed in the Ubisoft Connect PC app.
+  desktop_client: 'Claim in Ubisoft Connect',
+  region_locked: 'Not in your region',
+  // Humble Bundle.
+  link_required: 'Link the store account',
+  platform_choice: 'Pick a platform yourself',
+  region_blocked: 'Not in your region',
+  out_of_stock: 'Out of stock',
+  expired: 'Offer expired',
+  not_unlocked: 'Month not unlocked yet',
+  not_in_library: 'Not in your library',
+  not_free: 'No longer free',
+  // Fanatical: conditions the store sets on a giveaway, met only by a person.
+  newsletter_required: 'Needs newsletter sign-up',
+  steam_link_required: 'Link Steam on Fanatical',
+  steam_wishlist_required: 'Wishlist it on Steam first',
+  epic_link_required: 'Link Epic on Fanatical',
 }
 
 export const OUTCOME_LABEL: Record<ClaimOutcome, string> = {

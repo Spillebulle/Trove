@@ -104,6 +104,8 @@ export interface Claim {
   /** Whether there is a key to reveal. The key itself is a separate request. */
   has_key: boolean
   key_store: string | null
+  /** When the person marked the key redeemed; null while it is still to do. */
+  key_redeemed_at: string | null
   screenshot: string | null
   created_at: string | null
   /**

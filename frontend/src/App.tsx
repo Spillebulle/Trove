@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui'
 import { AccountDetail } from '@/pages/AccountDetail'
 import { Accounts } from '@/pages/Accounts'
 import { Dashboard } from '@/pages/Dashboard'
+import { Keys } from '@/pages/Keys'
 import { Ledger } from '@/pages/Ledger'
 import { Login } from '@/pages/Login'
 import { Offers } from '@/pages/Offers'
@@ -36,6 +37,7 @@ export function App() {
         <Route path="accounts/:id" element={<AccountDetail />} />
         <Route path="offers" element={<Offers />} />
         <Route path="ledger" element={<Ledger />} />
+        <Route path="keys" element={<Keys />} />
         <Route path="settings" element={<Settings />} />
         {/* An unknown path is a typo or a stale bookmark, not an error worth a
             page of its own in an app this small. */}

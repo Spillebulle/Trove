@@ -171,6 +171,9 @@ export const api = {
       request<Claim[]>(withQuery('/api/claims', query as Query)),
     key: (id: number) =>
       request<{ key_code: string; key_store: string | null }>(`/api/claims/${id}/key`),
+    toRedeem: () => request<Claim[]>('/api/redeem'),
+    markRedeemed: (id: number, redeemed: boolean) =>
+      post<Claim>(`/api/claims/${id}/redeemed`, { redeemed }),
   },
 
   runs: {
