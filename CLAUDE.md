@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.52. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.53. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -207,6 +207,23 @@ failure. The header's "Sign in" button opens the same form as a pop-up that
 mounts once. So Fanatical's `signin_url` is the store front, and adapters
 may declare `signin_opener` (a regex for the store's own sign-in button),
 which the automatic sign-in presses when it finds no form.
+
+**With the pop-up working, Fanatical asks for a reCAPTCHA on every login
+from here (measured 23 Nov 2026).** Its auth state lives in localStorage
+`bsauth`; after both the automatic attempt and a person's own first try it
+read `authenticated: false, challenge: {type: "reCaptcha", action: "LOGIN"}`
+- the person had closed the window 30 s after the password, before
+answering. Answered by hand, the session then held through a fresh driven
+check. So Fanatical, like IndieGala, signs in by hand; when a sign-in "did
+not work", read `bsauth` in the profile's `Local Storage/leveldb` before
+anything else - it says whether a challenge was left open.
+
+**And an Epic claim is one tap from the notification (0.1.53).** The
+"finish the claim" message and its 48-hour reminder link to
+`/accounts/<id>?finish=1` (`Notification.trove_query`), and the account page
+opens the checkout window itself for that link - once, only while
+`checkout_pending`, nothing holds the browser and a sign-in window can open,
+and the parameter is dropped so a reload opens nothing.
 
 ## Design
 

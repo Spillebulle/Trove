@@ -527,6 +527,7 @@ def sweep_pending_checkouts(db: Session, fresh_stores: set[str] | None = None) -
                     ),
                     severity="caution",
                     context=store_name,
+                    trove_query="finish=1",
                 ),
             )
 
@@ -1041,6 +1042,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                     detail=exc.reason,
                     severity="caution",
                     context=store_name,
+                    trove_query="finish=1",
                     image_path=image_path,
                 ),
             )

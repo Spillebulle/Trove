@@ -38,6 +38,9 @@ check("a message's own link wins (a claim links to the game)",
       link(N("t", account_id=3, url="https://store/p/game"), "https://trove.example.com").url, "https://store/p/game")
 check("no address set, no link", link(N("t", account_id=3), "").url, None)
 check("not an http(s) address, no link", link(N("t", account_id=3), "trove.local").url, None)
+check("a finish-the-claim message opens the checkout",
+      link(N("t", account_id=1, trove_query="finish=1"), "https://trove.example.com").url,
+      "https://trove.example.com/accounts/1?finish=1")
 check("no account, no link", link(N("t"), "https://trove.example.com").url, None)
 check("the setting exists, empty by default", settings_store.DEFAULTS["notify.public_url"], ("", False))
 

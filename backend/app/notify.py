@@ -85,6 +85,9 @@ class Notification:
     # (`notify.public_url`) a message with no `url` of its own links to that
     # account's page, so "finish the claim" is a tap away instead of a hunt.
     account_id: int | None = None
+    # Appended to that account link: "finish=1" makes the page open the
+    # checkout window itself, so the message is one tap from the captcha.
+    trove_query: str | None = None
     # The game's poster, shown large in a Discord embed - what makes a claim
     # look like a claim rather than a log line. A public URL (the store's own
     # CDN); a local screenshot path would not work, because Discord fetches the
@@ -215,7 +218,8 @@ def with_trove_link(note: Notification, public_url: str | None) -> Notification:
     base = (public_url or "").strip().rstrip("/")
     if note.url or note.account_id is None or not base.startswith(("http://", "https://")):
         return note
-    return dataclasses.replace(note, url=f"{base}/accounts/{note.account_id}")
+    query = f"?{note.trove_query}" if note.trove_query else ""
+    return dataclasses.replace(note, url=f"{base}/accounts/{note.account_id}{query}")
 
 
 async def send(kind: str, note: Notification) -> None:

@@ -5,8 +5,8 @@
  * the attention notice is at the top with the two things that answer it side by
  * side: open the browser, and say it is fixed. Everything else is below.
  */
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AtSign,
@@ -217,6 +217,23 @@ export function AccountDetail() {
     },
     onError: (error: Error) => push(error.message, 'critical'),
   })
+
+  // `?finish=1` is the link a "finish the claim" notification carries, so a
+  // tap on the phone lands on the checkout window rather than on a page with
+  // a button to find. It opens once, only while a checkout is actually
+  // pending and nothing else holds the browser, and the parameter is dropped
+  // at once so a reload or a revisit never opens a second window.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const finishFromLink = useRef(false)
+  useEffect(() => {
+    if (searchParams.get('finish') !== '1' || finishFromLink.current) return
+    if (!account.data || !localSignIn.data) return
+    finishFromLink.current = true
+    setSearchParams({}, { replace: true })
+    if (account.data.checkout_pending && !account.data.busy_with && localSignIn.data.ok) {
+      finishClaim.mutate()
+    }
+  }, [searchParams, account.data, localSignIn.data, finishClaim, setSearchParams])
 
   // Can Trove type into the screen for them? Only asked once the screen is
   // the route in; on a desktop the person has their own password manager.
