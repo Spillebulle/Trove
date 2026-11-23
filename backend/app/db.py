@@ -87,6 +87,10 @@ def _migrate(engine) -> None:
             # When the "two days left to finish that checkout" reminder
             # went out, so a restart does not send it again.
             "checkout_reminded_at": "DATETIME",
+            # 0.1.46: the automatic sign-in's bookkeeping.
+            "signed_out": "BOOLEAN NOT NULL DEFAULT 0",
+            "auto_signin_at": "DATETIME",
+            "auto_signin_paused": "BOOLEAN NOT NULL DEFAULT 0",
         },
         "claims": {
             # 0.1.21: the ledger tells a DLC from a game and carries its poster.
@@ -128,6 +132,18 @@ def _migrate(engine) -> None:
                             text(
                                 "UPDATE offers SET free_seen_at = first_seen_at "
                                 "WHERE free_seen_at IS NULL"
+                            )
+                        )
+                    if table == "accounts" and name == "signed_out":
+                        # Accounts an older build parked for a signed-out
+                        # session, so the automatic sign-in can reach them
+                        # without somebody pressing "Check again" first. Every
+                        # adapter's signed-out sentence says "signed out".
+                        conn.execute(
+                            text(
+                                "UPDATE accounts SET signed_out = 1 "
+                                "WHERE status = 'needs_attention' "
+                                "AND status_reason LIKE '%signed out%'"
                             )
                         )
 

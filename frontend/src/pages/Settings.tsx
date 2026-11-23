@@ -99,6 +99,12 @@ export function Settings() {
             checked={Boolean(values['schedule.enabled'])}
             onChange={(value) => set('schedule.enabled', value)}
           />
+          <Toggle
+            label="Sign back in automatically"
+            description="When an account is found signed out, Trove signs in with the email and password stored on it. A captcha or an emailed code still needs you."
+            checked={Boolean(values['signin.automatic'])}
+            onChange={(value) => set('signin.automatic', value)}
+          />
           <p className="mt-2 border-t border-line-soft pt-3 text-small text-dim">
             Each account has its own interval, set on its own page. Runs are
             spread either side of it so they do not land on the same minute

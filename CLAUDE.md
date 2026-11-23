@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.45. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.46. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -134,6 +134,46 @@ through a remote picture, the captcha is the only thing that needs a person
 and a forty-character generated password is not typed key by key. A stored
 password used to log in unattended would be the thing bot detection is
 looking for, and it would undo the design; this is not that.
+
+**Superseded in part by the automatic sign-in (0.1.46), at the owner's
+request.** On 23 Nov 2026 the person whose accounts these are asked for
+every account to work "without any of my input, even for login". So the
+stored details now have exactly two readers: the type endpoint above, and
+`runner.auto_signin` -> `autosignin.attempt`. The rules that keep the second
+from being a password replayed on a schedule:
+
+- It runs **only after a check has read the account as signed out**
+  (`browser.SignedOut` from a run's health check, or `check_session`), which
+  sets `Account.signed_out`; parked accounts are retried from the scheduler
+  loop. At most one attempt per `autosignin.COOLDOWN_H` (12 h) per account.
+- **It reads the form instead of typing blind.** Chrome is started with the
+  warm session's launch (a DevTools port, no Playwright:
+  `manager.bare_session`), and a page script tags the email, password, code,
+  "Remember me" and submit elements before anything is typed - so GOG's two
+  forms, Epic's email-first form and Steam's one-page form are all the same
+  loop. Footer and newsletter email boxes are excluded; social sign-in
+  buttons are never pressed; only a "remember me" checkbox is ever ticked.
+- **It stops at anything a person must answer**: a visible captcha (an
+  invisible reCAPTCHA badge is not one), a code it cannot produce (a stored
+  TOTP secret it can), an error from the store. A refused password or an
+  emailed code sets `auto_signin_paused`, which holds until a person signs in
+  - a refused password tried twice is how an account gets locked, and each
+  retry of an emailed-code login sends another email. It never answers a
+  captcha; that rule is unchanged.
+- The verdict is the adapter's own `health`, read afterwards by
+  `check_session` in the driven browser. A successful sign-in pulls the next
+  run to two minutes away.
+- "Sign back in automatically" in Settings (`signin.automatic`, default on)
+  turns it off. A person's own sign-in window closing never triggers it.
+
+Two traps found building it, both measured with `tools/autosignin_sim.py`:
+**a page Chrome considers hidden drops every DevTools mouse and key event**
+(on a Windows desktop a covered window reads `visibilityState: hidden`; text
+typed by `Input.insertText` still lands, so it looks like a key problem), so
+the launch disables occlusion tracking on Windows only; and submitting is a
+trusted click on the form's own button, with Enter only as the fallback.
+IndieGala's login always carries a reCAPTCHA checkbox, so it will always stop
+and ask.
 
 ## Design
 
@@ -1775,6 +1815,7 @@ backend/.venv/Scripts/python tools/ubisoft_sim.py      # Ubisoft giveaways
 backend/.venv/Scripts/python tools/fanatical_sim.py    # Fanatical, zero-total cart
 backend/.venv/Scripts/python tools/humble_sim.py       # Humble store + Choice
 backend/.venv/Scripts/python tools/session_keep_sim.py # session cookies survive
+backend/.venv/Scripts/python tools/autosignin_sim.py   # needs real Chrome; also runs in container-smoke
 ```
 
 When there is a real test suite, put how to run a single test here.
@@ -2232,9 +2273,10 @@ window. See the two paragraphs on it above.
 
 - Storing store passwords and logging in on every run. It is the thing bot
   detection is looking for, and it is what turns a missed claim into a locked
-  account. (The stored sign-in details of 0.1.7 are not this: they are typed
-  at the person's request into their own sign-in window, and nothing that
-  runs unattended can read them. Keep it that way.)
+  account. (The stored sign-in details are not this: they are typed at the
+  person's request, or by the 0.1.46 automatic sign-in only after a check
+  found the session gone, at most twice a day, reading the form, stopping at
+  any captcha or refusal. Keep those limits.)
 - Running the browser headless because it is easier in Docker. Measure it before
   relying on it.
 - Retrying a failed claim in a loop. One attempt, then the attention queue.

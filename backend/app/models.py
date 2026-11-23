@@ -161,6 +161,14 @@ class Account(Base):
     # so a restart cannot send it twice. Cleared with `checkout_offer`: a new
     # blocked checkout earns its own reminder.
     checkout_reminded_at = Column(DateTime, nullable=True)
+    # 0.1.46, the automatic sign-in (`autosignin.py`). `signed_out` is set when
+    # a check reads the session as gone - the one parked state an automatic
+    # sign-in may answer - and cleared with any `ok`. `auto_signin_at` is the
+    # last attempt, for the cooldown; `auto_signin_paused` stops further
+    # attempts after one the store refused, until a person has signed in.
+    signed_out = Column(Boolean, nullable=False, default=False)
+    auto_signin_at = Column(DateTime, nullable=True)
+    auto_signin_paused = Column(Boolean, nullable=False, default=False)
 
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)

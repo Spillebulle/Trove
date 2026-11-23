@@ -76,6 +76,8 @@ def serialise(db: Session, account: Account) -> AccountRead:
         checkout_pending=bool(account.checkout_offer),
         login_email=decrypt(account.login_email) if account.login_email else None,
         has_login_password=bool(account.login_password),
+        auto_signin_at=account.auto_signin_at,
+        auto_signin_paused=bool(account.auto_signin_paused),
         notes=account.notes,
         created_at=account.created_at,
         claimed_count=claimed,
@@ -285,7 +287,9 @@ async def sign_in_here(account_id: int, db: Session = Depends(get_db)) -> Accoun
         know - and it must check rather than assume, because "signed in" is the
         flag that lets the scheduler start opening browsers on its own.
         """
-        healthy, sentence = await check_session(account_id)
+        # Not automatic: a person has just signed in by hand, and typing over
+        # whatever they left on the screen is not help.
+        healthy, sentence = await check_session(account_id, auto=False)
         await notify.send(
             "attention" if not healthy else "claimed",
             notify.Notification(

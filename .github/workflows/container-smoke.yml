@@ -118,6 +118,15 @@ jobs:
           docker cp tools/auto_finish_sim.py trove:/tmp/auto_finish_sim.py
           docker exec -e PYTHONPATH=/app -u pwuser -w /app trove python /tmp/auto_finish_sim.py
 
+      - name: The automatic sign-in reads the form and stops where it must
+        # Real Chrome on the container's display against five fake login pages
+        # on localhost: types into the right fields, ticks "Remember me" and
+        # nothing else, never types into a newsletter box, stops at a captcha,
+        # submits a refused password once and pauses.
+        run: |
+          docker cp tools/autosignin_sim.py trove:/tmp/autosignin_sim.py
+          docker exec -e PYTHONPATH=/app -e DATA_DIR=/tmp/autosignin-sim -u pwuser -w /app trove python /tmp/autosignin_sim.py
+
       - name: Which way did the sandbox go? (and does "on" still launch)
         # The default probe above already decided; this prints it, then forces
         # the sandbox on to see whether that alone launches. Non-fatal.

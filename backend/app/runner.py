@@ -36,12 +36,13 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from . import notify
+from . import autosignin, notify
 from .adapters import FreeOffer, get_adapter
 from .browser import (
     CheckoutBlocked,
     NeedsAttention,
     ProfileBusy,
+    SignedOut,
     StoreChallenged,
     StoreUnavailable,
     http_refusal_reason,
@@ -52,7 +53,7 @@ from .browser import (
     screenshot_name,
 )
 from .config import get_settings
-from .crypto import encrypt
+from .crypto import decrypt, encrypt, totp_code
 from .db import SessionLocal
 from .models import Account, Claim, Offer, Run
 from .timeutil import as_utc, utcnow
@@ -587,6 +588,10 @@ def _set_status(
     account.status_reason = reason
     account.status_at = utcnow()
     account.status_screenshot = shot
+    if status == "ok":
+        # Signed in, by whoever: the automatic sign-in may try again next time.
+        account.signed_out = False
+        account.auto_signin_paused = False
     db.commit()
 
 
@@ -608,7 +613,7 @@ def _clear_checkout_marker(account: Account) -> None:
         account.status_screenshot = None
 
 
-async def check_session(account_id: int) -> tuple[bool, str]:
+async def check_session(account_id: int, auto: bool = True) -> tuple[bool, str]:
     """Ask the store whether this account is signed in, and record the answer.
 
     The other half of the un-driven sign-in window. A person signs in somewhere
@@ -668,8 +673,129 @@ async def check_session(account_id: int) -> tuple[bool, str]:
             scheduler.schedule_next(account)
             db.commit()
         else:
+            account.signed_out = True
             _set_status(db, account, "needs_attention", sentence, shot)
+            # `auto` is false when the automatic sign-in itself is asking, and
+            # when a person has just closed their own sign-in window.
+            if auto and auto_signin_blocker(db, account) is None:
+                start_auto_signin(account.id)
+                sentence += " Trove is trying to sign it back in by itself now."
         return healthy, sentence
+    finally:
+        db.close()
+
+
+# --- Signing back in by itself ------------------------------------------------
+
+_auto_signin_tasks: dict[int, asyncio.Task] = {}
+
+
+def auto_signin_blocker(db: Session, account: Account) -> str | None:
+    """Why an automatic sign-in may not run for this account now, or None."""
+    from . import settings_store
+
+    if not settings_store.get(db, "signin.automatic"):
+        return "Automatic sign-in is off in Settings."
+    if not (account.login_email and account.login_password):
+        return "No sign-in email and password are stored on this account."
+    if account.auto_signin_paused:
+        return "The last automatic sign-in was refused, so it waits for a person to sign in."
+    last = as_utc(account.auto_signin_at)
+    if last is not None and utcnow() - last < timedelta(hours=autosignin.COOLDOWN_H):
+        return f"Trove tried to sign in by itself less than {autosignin.COOLDOWN_H} hours ago."
+    if account.id in _auto_signin_tasks:
+        return "An automatic sign-in is already running."
+    return None
+
+
+def start_auto_signin(account_id: int) -> None:
+    """Run `auto_signin` in the background, once per account at a time."""
+    if account_id in _auto_signin_tasks:
+        return
+    task = asyncio.create_task(auto_signin(account_id), name=f"trove-auto-signin-{account_id}")
+    _auto_signin_tasks[account_id] = task
+    task.add_done_callback(lambda _t: _auto_signin_tasks.pop(account_id, None))
+
+
+async def auto_signin(account_id: int) -> tuple[bool, str]:
+    """Sign a signed-out account in with its stored details, then check.
+
+    See `autosignin.py` for the rules. The verdict is `check_session`'s - the
+    adapter's ordinary health check in the ordinary driven browser - never
+    the attempt's own impression.
+    """
+    db = SessionLocal()
+    try:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if account is None:
+            return False, "No such account."
+        adapter = get_adapter(account.store)
+        account.auto_signin_at = utcnow()
+        db.commit()
+        email = decrypt(account.login_email)
+        password = decrypt(account.login_password)
+        secret = decrypt(account.totp_secret) if account.totp_secret else None
+        profile = settings.profiles_path / account.profile_path
+        label, store_name = account.label, adapter.display_name
+    finally:
+        db.close()
+
+    logger.info("Signing %s (%s) back in by itself.", label, store_name)
+    try:
+        outcome = await autosignin.attempt(
+            account_id, profile, adapter.sign_in_page, email, password,
+            totp=(lambda: totp_code(secret)) if secret else None, store_name=store_name,
+        )
+    except ProfileBusy as exc:
+        return False, str(exc)
+    except Exception as exc:
+        logger.exception("The automatic sign-in for account %s failed", account_id)
+        outcome = autosignin.Outcome(False, f"The automatic sign-in hit an error ({type(exc).__name__}).")
+    logger.info("Automatic sign-in for %s: submitted=%s, %s", label, outcome.submitted, outcome.sentence)
+
+    healthy, check_sentence = await check_session(account_id, auto=False)
+    db = SessionLocal()
+    try:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if account is None:
+            return healthy, check_sentence
+        if healthy:
+            # Run soon rather than an interval from now: whatever was free
+            # while it was signed out is still waiting.
+            account.next_run_at = utcnow() + timedelta(minutes=2)
+            db.commit()
+            sentence = f"Trove signed {label} back in to {store_name} by itself."
+            notify.send_soon(
+                "claimed",
+                notify.Notification(
+                    account_id=account_id, title=f"{label} signed back in",
+                    detail=sentence, severity="good", context=store_name,
+                ),
+            )
+            return True, sentence
+        if account.status != "needs_attention":
+            # A challenge on the check: the status was left alone and the
+            # reason says why; nothing more to add.
+            return False, check_sentence
+        why = (
+            "the details went in, but the store still reads it as signed out"
+            if outcome.submitted
+            else outcome.sentence[0].lower() + outcome.sentence[1:]
+        )
+        reason = (
+            f"Trove tried to sign in by itself: {why.rstrip('.')}. "
+            'Sign in with "Sign in here".'
+        )
+        account.auto_signin_paused = outcome.pause
+        _set_status(db, account, "needs_attention", reason, account.status_screenshot)
+        notify.send_soon(
+            "attention",
+            notify.Notification(
+                account_id=account_id, title=f"{label} needs a sign-in",
+                detail=reason, severity="caution", context=store_name,
+            ),
+        )
+        return False, reason
     finally:
         db.close()
 
@@ -912,6 +1038,26 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                     image_path=image_path,
                 ),
             )
+        except SignedOut as exc:
+            run.status = "attention"
+            run.message = exc.reason
+            account.signed_out = True
+            _set_status(db, account, "needs_attention", exc.reason, exc.screenshot)
+            if auto_signin_blocker(db, account) is None:
+                # The attempt says so itself if it fails; nothing to bother a
+                # person with yet.
+                start_auto_signin(account.id)
+            else:
+                notify.send_soon(
+                    "attention",
+                    notify.Notification(
+                        account_id=account.id,
+                        title=f"{label} needs a hand",
+                        detail=exc.reason,
+                        severity="caution",
+                        context=store_name,
+                    ),
+                )
         except NeedsAttention as exc:
             run.status = "attention"
             run.message = exc.reason
@@ -1120,7 +1266,7 @@ async def _check_health(db, account, adapter, page) -> None:
         shot = await screenshot(
             page, screenshot_name(account.id, account.store, "health")
         )
-        raise NeedsAttention(sentence, shot)
+        raise SignedOut(sentence, shot)
 
     # The session is good, so an old attention flag is stale - and so is an
     # old *reason* on an account that was never parked. A challenge leaves the

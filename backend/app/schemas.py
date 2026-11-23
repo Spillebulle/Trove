@@ -117,6 +117,10 @@ class AccountRead(Read):
     # password only as a yes/no.
     login_email: str | None = None
     has_login_password: bool = False
+    # The automatic sign-in's last attempt, and whether it is waiting for a
+    # person after the store refused one.
+    auto_signin_at: datetime | None = None
+    auto_signin_paused: bool = False
     notes: str | None
     created_at: datetime | None
     # Counts for the account card, so the list page does not need one request

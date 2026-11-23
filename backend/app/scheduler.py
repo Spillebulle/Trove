@@ -30,7 +30,14 @@ from .adapters import ADAPTER_MAP
 from .config import get_settings
 from .db import SessionLocal
 from .models import Account
-from .runner import discover, discover_upcoming, run_account, sweep_pending_checkouts
+from .runner import (
+    auto_signin_blocker,
+    discover,
+    discover_upcoming,
+    run_account,
+    start_auto_signin,
+    sweep_pending_checkouts,
+)
 from .timeutil import as_utc, utcnow
 
 logger = logging.getLogger(__name__)
@@ -84,6 +91,12 @@ async def _account_loop(account_id: int) -> None:
                 # against a store that has just asked a question is how a
                 # question becomes a lock.
                 if account.status == "needs_attention":
+                    # The one question Trove may answer itself: a session that
+                    # has gone, with sign-in details stored. The blocker holds
+                    # the cooldown, so this is at most one attempt per
+                    # `autosignin.COOLDOWN_H`, however often the loop ticks.
+                    if account.signed_out and auto_signin_blocker(db, account) is None:
+                        start_auto_signin(account.id)
                     continue
                 if account.status == "never_signed_in":
                     continue

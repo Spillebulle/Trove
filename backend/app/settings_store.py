@@ -52,6 +52,10 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     # install needs is a hand-driven sign-in, and a background loop opening
     # browsers while somebody is still reading the page is a bad first minute.
     "schedule.enabled": (False, False),
+    # Sign an account back in with its stored details when a check finds it
+    # signed out (`autosignin.py`). Only accounts with an email and password
+    # stored are touched; a captcha or an emailed code still stops it.
+    "signin.automatic": (True, False),
     # --- Discovery -------------------------------------------------------
     # Ask a public giveaway feed what is free, so the store adapters only wake
     # up when there is something to claim. Off by default: it is a third-party

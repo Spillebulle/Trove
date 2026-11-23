@@ -293,6 +293,14 @@ class NeedsAttention(Exception):
         self.screenshot = screenshot
 
 
+class SignedOut(NeedsAttention):
+    """The health check read the account as signed out.
+
+    Its own type so the runner can tell "the session is gone" - the one stop
+    an automatic sign-in can answer - from every other question a store asks.
+    """
+
+
 class StoreChallenged(NeedsAttention):
     """The store put an anti-bot challenge in front of the *driven* browser.
 
@@ -892,6 +900,13 @@ async def _start_attachable_chrome(executable: Path, profile_path: Path) -> tupl
         args.append("--headless=new")
     if settings.browser_proxy:
         args.append(f"--proxy-server={settings.browser_proxy}")
+    if os.name == "nt":
+        # A desktop only: Windows tells Chrome its window is covered, Chrome
+        # marks the page hidden, and a hidden page drops every mouse and key
+        # event sent over DevTools (measured, `visibilityState: hidden`).
+        # Leaves the container's measured flag set untouched.
+        args += ["--disable-backgrounding-occluded-windows",
+                 "--disable-features=CalculateNativeWinOcclusion"]
     args.append("about:blank")
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     loop = asyncio.get_event_loop()
@@ -939,6 +954,30 @@ async def _pass_check_unattached(port: int, url: str) -> None:
         "The page at %s was still on a security check after %.0fs with nothing "
         "attached; handing over to the run, which will report it.", url, UNATTACHED_CHECK_S,
     )
+
+
+async def _close_gracefully(port: int, proc: subprocess.Popen) -> None:
+    """Ask Chrome to close itself over DevTools, then make sure it has."""
+    import urllib.request
+
+    import websockets
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as response:
+            ws_url = json.load(response)["webSocketDebuggerUrl"]
+        async with websockets.connect(ws_url, max_size=None) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            try:
+                await asyncio.wait_for(ws.recv(), timeout=5)
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.debug("Browser.close on port %s: %s", port, exc)
+    try:
+        await asyncio.to_thread(proc.wait, 15)
+    except subprocess.TimeoutExpired:
+        pass
+    await asyncio.to_thread(_stop_process, proc)
 
 
 def _stop_process(proc: subprocess.Popen | None) -> None:
@@ -1112,6 +1151,47 @@ class BrowserManager:
                 # Off the event loop: Chrome flushes its cookies on the way out,
                 # and the session it just wrote is in that flush.
                 await asyncio.to_thread(_stop_process, process)
+            entry.lock.release()
+
+    @asynccontextmanager
+    async def bare_session(self, account_id: int, profile_path: Path, holder: str, wait_s: float = 5.0):
+        """Real Chrome on the profile with a DevTools port and nothing else.
+
+        For the automatic sign-in (`autosignin.py`): the same lock as every
+        other path, the same launch as the warm session - which is the one
+        Cloudflare was measured to let through - and no Playwright at all.
+        Yields the port. On the way out Chrome is asked to close itself
+        (`Browser.close`), so the cookie database is flushed the way a person
+        closing the window flushes it, and the profile is given its settle
+        time before the lock is released.
+        """
+        entry = self._entry(account_id, profile_path)
+        try:
+            await asyncio.wait_for(entry.lock.acquire(), timeout=wait_s or 0.001)
+        except (asyncio.TimeoutError, TimeoutError):
+            held_by = entry.lease.holder if entry.lease else "something else"
+            raise ProfileBusy(
+                f"The browser profile for this account is in use by "
+                f"{held_by}. Close it and try again."
+            ) from None
+        entry.lease = Lease(holder=holder)
+        process: subprocess.Popen | None = None
+        port = 0
+        try:
+            profile_path = profile_path.resolve()
+            profile_path.mkdir(parents=True, exist_ok=True)
+            quiet_profile(profile_path)
+            channel = await resolve_channel(await self._ensure_playwright(), profile_path)
+            executable = find_chrome_executable() if channel == "chrome" else None
+            if executable is None:
+                raise RuntimeError("Signing in by itself needs real Chrome, and it is not installed.")
+            process, port = await _start_attachable_chrome(executable, profile_path)
+            yield port
+        finally:
+            if process is not None:
+                await _close_gracefully(port, process)
+                await asyncio.sleep(PROFILE_SETTLE_S)
+            entry.lease = None
             entry.lock.release()
 
     async def open_local(

@@ -61,6 +61,8 @@ export interface Account {
   /** The stored sign-in email, if any; the password only as a yes/no. */
   login_email: string | null
   has_login_password: boolean
+  auto_signin_at: string | null
+  auto_signin_paused: boolean
   notes: string | null
   created_at: string | null
   claimed_count: number
