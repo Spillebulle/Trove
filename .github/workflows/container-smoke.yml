@@ -193,9 +193,10 @@ jobs:
           curl -fsS -b "$jar" -X POST "http://127.0.0.1:8080/api/accounts/$id/close-sign-in" -o /dev/null -w '%{http_code}\n'
           sleep 6
           # Only the un-driven window must be gone. The session check Trove
-          # runs after it closes opens the profile with Playwright, and that
-          # one carries --remote-debugging-pipe.
-          if docker exec trove sh -c 'pgrep -af "window-position=0,0" | grep -v "type=" >/dev/null'; then
+          # runs after it closes opens the profile too - with Playwright
+          # (--remote-debugging-pipe) or, since 0.1.40, as a warm session
+          # (--remote-debugging-port) - and either is not the window.
+          if docker exec trove sh -c 'pgrep -af "window-position=0,0" | grep -v "type=" | grep -v "remote-debugging" >/dev/null'; then
             echo "::error::the window is still open after close-sign-in"; exit 1
           fi
           echo "closed"
