@@ -188,6 +188,11 @@ export function Settings() {
               </button>
             </div>
 
+            <PublicUrlField
+              stored={(values['notify.public_url'] as string) ?? ''}
+              onSave={(value) => set('notify.public_url', value)}
+            />
+
             <div className="mt-4 border-t border-line-soft pt-2">
               <p className="eyebrow mb-1">What is worth a message</p>
               <Toggle
@@ -260,6 +265,46 @@ const SCOPE_HELP: Record<ApiKeyScope, string> = {
   full: 'Reads everything and can act: run an account, check a session, change settings. Give it only to something you would trust with your password.',
   read_only:
     'Reads accounts, runs, offers and the ledger, and changes nothing. Every write is refused.',
+}
+
+// Trove cannot see the address a person reaches it at, so a message can only
+// link back to an account page once somebody says what that address is. The
+// address this page is open on is almost always the right answer, so it is
+// offered rather than typed.
+function PublicUrlField({ stored, onSave }: { stored: string; onSave: (value: string) => void }) {
+  const [value, setValue] = useState(stored)
+  useEffect(() => setValue(stored), [stored])
+  const here = window.location.origin
+  const save = (next: string) => {
+    const clean = next.trim().replace(/\/+$/, '')
+    if (clean !== stored) onSave(clean)
+  }
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <Field
+        label="Trove's address"
+        hint="Messages about an account link to its page here, so “finish the claim” is one tap from the message. Leave empty for no links."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="url"
+            className="field min-w-0 flex-1"
+            value={value}
+            placeholder={here}
+            onChange={(event) => setValue(event.target.value)}
+            onBlur={() => save(value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {stored !== here && (
+            <button type="button" className="btn-secondary" onClick={() => save(here)}>
+              Use this address
+            </button>
+          )}
+        </div>
+      </Field>
+    </div>
+  )
 }
 
 function ApiKeys() {

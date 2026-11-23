@@ -98,6 +98,9 @@ jobs:
       - name: API keys - scopes, revocation, and what a key never reaches
         run: python tools/api_key_sim.py
 
-      # The browser half skips itself where no browser is installed.
-      - name: Dropping a stale Cloudflare verdict, and only that
+      # No browser, no network.
+      - name: Epic's warm session, and no Cloudflare cookie drop
         run: python tools/cloudflare_cookie_sim.py
+
+      - name: Notifications link back to Trove
+        run: python tools/notify_link_sim.py

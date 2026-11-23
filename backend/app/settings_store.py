@@ -43,6 +43,10 @@ DEFAULTS: dict[str, tuple[Any, bool]] = {
     "notify.on_attention": (True, False),
     "notify.on_failed": (True, False),
     "notify.on_run_summary": (False, False),
+    # The address Trove is reached at from outside (https://trove.example.com),
+    # so a message about an account can link to its page. Empty means no links:
+    # Trove cannot know the address a person uses from where it sits.
+    "notify.public_url": ("", False),
     # --- Schedule --------------------------------------------------------
     # The scheduler is off until the user turns it on. The first thing a new
     # install needs is a hand-driven sign-in, and a background loop opening

@@ -17,6 +17,7 @@ summary is a single message rather than one per claim.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 from dataclasses import dataclass
@@ -80,6 +81,10 @@ class Notification:
     context: str | None = None
     # A link the message should point at, when there is a page worth opening.
     url: str | None = None
+    # The account the message is about. With Trove's own address set
+    # (`notify.public_url`) a message with no `url` of its own links to that
+    # account's page, so "finish the claim" is a tap away instead of a hunt.
+    account_id: int | None = None
     # The game's poster, shown large in a Discord embed - what makes a claim
     # look like a claim rather than a log line. A public URL (the store's own
     # CDN); a local screenshot path would not work, because Discord fetches the
@@ -200,6 +205,19 @@ _FLAG_FOR_KIND = {
 }
 
 
+def with_trove_link(note: Notification, public_url: str | None) -> Notification:
+    """Point a message about an account at that account's page in Trove.
+
+    Only when the message has no link of its own (a claim links to the game,
+    which is the better link there) and only for an http(s) address - the
+    setting is typed by a person and a stray word must not become a link.
+    """
+    base = (public_url or "").strip().rstrip("/")
+    if note.url or note.account_id is None or not base.startswith(("http://", "https://")):
+        return note
+    return dataclasses.replace(note, url=f"{base}/accounts/{note.account_id}")
+
+
 async def send(kind: str, note: Notification) -> None:
     """Dispatch a message of `kind`, if the user asked for that kind.
 
@@ -218,8 +236,11 @@ async def send(kind: str, note: Notification) -> None:
         if flag and not settings_store.get(db, flag):
             return
         url = settings_store.get(db, "notify.webhook_url")
+        public = settings_store.get(db, "notify.public_url")
     finally:
         db.close()
+
+    note = with_trove_link(note, public)
 
     ok, message = await post(channel, url, note)
     if not ok:

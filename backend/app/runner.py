@@ -175,6 +175,7 @@ class _CaptchaWaiter:
         notify.send_soon(
             "attention",
             notify.Notification(
+                account_id=self.account_id,
                 title=f"{self.label}: a captcha needs you",
                 detail=(
                     f"{self.store_name} put up a captcha at the checkout. Open "
@@ -490,6 +491,7 @@ def sweep_pending_checkouts(db: Session, fresh_stores: set[str] | None = None) -
             notify.send_soon(
                 "attention",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{account.label}: the claim for {title} was missed",
                     detail=detail,
                     severity="caution",
@@ -515,6 +517,7 @@ def sweep_pending_checkouts(db: Session, fresh_stores: set[str] | None = None) -
             notify.send_soon(
                 "attention",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{account.label}: {left} left to finish the claim",
                     detail=(
                         f"The checkout for {title} is still waiting for you. "
@@ -770,6 +773,7 @@ async def verify_checkout(account_id: int) -> tuple[bool, str]:
             notify.send_soon(
                 "claimed",
                 notify.Notification(
+                    account_id=account.id,
                     title=row.title,
                     detail="Added to your library — finished in the sign-in window.",
                     severity="good",
@@ -855,6 +859,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
                 notify.send_soon(
                     "attention",
                     notify.Notification(
+                        account_id=account.id,
                         title=(
                             f"{label}: {store_name} is refusing visits for now"
                             if isinstance(exc, StoreUnavailable)
@@ -899,6 +904,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             notify.send_soon(
                 "attention",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{label}: finish the claim in the sign-in window",
                     detail=exc.reason,
                     severity="caution",
@@ -913,6 +919,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             notify.send_soon(
                 "attention",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{label} needs a hand",
                     detail=exc.reason,
                     severity="caution",
@@ -931,6 +938,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             notify.send_soon(
                 "failed",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{label} could not be checked",
                     detail=run.message,
                     severity="critical",
@@ -949,6 +957,7 @@ async def run_account(account_id: int, trigger: str = "schedule", watch: bool = 
             notify.send_soon(
                 "run_summary",
                 notify.Notification(
+                    account_id=account.id,
                     title=f"{label}: {run.claimed} claimed",
                     detail=(
                         f"{run.claimed} claimed, {run.already_owned} already "
@@ -1198,6 +1207,7 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
             notify.send_soon(
                 "claimed",
                 notify.Notification(
+                    account_id=account.id,
                     # The game is the headline and its poster is the picture;
                     # the store and account go in the footer. A claim should
                     # look like the thing it is, not like a log line.

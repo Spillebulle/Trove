@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.40. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.41. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -1628,6 +1628,7 @@ backend/.venv/Scripts/python tools/prime_sim.py        # session discovery
 backend/.venv/Scripts/python tools/ledger_fold_sim.py  # the fold, and challenges
 backend/.venv/Scripts/python tools/api_key_sim.py      # keys, scopes, the line
 backend/.venv/Scripts/python tools/cloudflare_cookie_sim.py  # the warm session, no cookie drop
+backend/.venv/Scripts/python tools/notify_link_sim.py  # messages link to the account
 ```
 
 When there is a real test suite, put how to run a single test here.
