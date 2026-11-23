@@ -118,13 +118,20 @@ _INSPECT_JS = r"""
           || null;
   }
   if (submit) submit.setAttribute('data-trove-auto', 'submit');
+  // A second-step chooser (Humble: "Send code to <email>" or "Use your
+  // Authenticator App (TOTP)"). Only the authenticator choice is ever tagged
+  // to press; an emailed code is something a person reads.
+  const clickables = [...document.querySelectorAll('button, [role=button], a')].filter(visible);
+  const authApp = !field && clickables.find(b => /authenticator|totp|authentication app/i.test(label(b)));
+  if (authApp) authApp.setAttribute('data-trove-auto', 'authapp');
+  const sendCode = !field && clickables.some(b => /send (a |the )?code|email me|text me|send (an )?email/i.test(label(b)));
   const alerts = [...document.querySelectorAll('[role=alert], [aria-live=assertive], [class*=error i], [class*=alert i], [data-testid*=message i], [class*=message i]')]
     .filter(visible).map(e => e.innerText.trim()).filter(t => t && t.length < 300);
   const error = alerts.find(t => /incorrect|invalid|wrong|not (be )?(found|recogni[sz]ed)|doesn.t match|did not match|too many|try again later|locked|couldn.t sign|unable to sign/i.test(t)) || null;
   return JSON.stringify({
     url: location.href, title: document.title,
     user: tag(user[0], 'user'), password: tag(password[0], 'password'), code: tag(codes[0], 'code'),
-    captcha, loginFrame, remember: !!remember, error, submit: submit ? label(submit).slice(0, 40) : null,
+    captcha, loginFrame, remember: !!remember, error, authApp: !!authApp, sendCode, submit: submit ? label(submit).slice(0, 40) : null,
   });
 })()
 """
@@ -274,7 +281,7 @@ async def attempt(
 async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_name: str) -> Outcome:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + ATTEMPT_S
-    typed_user = typed_password = typed_code = followed_frame = False
+    typed_user = typed_password = typed_code = followed_frame = chose_app = False
     code_judged_at = 0.0
     empty_reads = 0
     gone_reads = 0
@@ -340,6 +347,20 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
             await cdp.evaluate("document.querySelector('[data-trove-auto=user]')?.focus()")
             await cdp.submit(state)
             typed_user = True
+        elif state.get("authApp") and totp is not None and not chose_app:
+            # The store asks which second step; the authenticator is the one
+            # Trove can answer.
+            await cdp.click_tagged("authapp")
+            chose_app = True
+            gone_reads = 0
+        elif state.get("authApp") or state.get("sendCode"):
+            return Outcome(
+                False,
+                f"{store_name} asked for a second sign-in step Trove cannot answer"
+                + (" (the authenticator choice did not lead to a code field)." if chose_app
+                   else ": a code sent by email. Turning on an authenticator app there, and storing its secret in Trove, would let it finish."),
+                pause=True,
+            )
         elif (typed_password or typed_code) and not pw and not user and not code:
             # The form is gone and nothing objected - unless the next step is
             # still loading. Humble's password step hands over to a new page
