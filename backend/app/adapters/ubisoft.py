@@ -555,7 +555,7 @@ class UbisoftAdapter(BaseAdapter):
                 " account, so the session behind it may be fine - Trove has"
                 " left it alone and will try again on the next run."
             )
-        user = await _read_user(page)
+        user = await _read_user_settled(page)
         if isinstance(user, dict) and isinstance(user.get("isLoggedIn"), bool):
             if user["isLoggedIn"]:
                 return True, "Signed in."
@@ -575,7 +575,7 @@ class UbisoftAdapter(BaseAdapter):
             await _goto(page, HOME_URL)
         except PlaywrightTimeout:
             return None
-        user = await _read_user(page)
+        user = await _read_user_settled(page)
         if not isinstance(user, dict) or user.get("isLoggedIn") is not True:
             return None
         ids = {_product_id(offer) or "", str(offer.extra.get("master_id") or "")}
@@ -658,7 +658,7 @@ class UbisoftAdapter(BaseAdapter):
 
     async def _on_store_page(self, page: Page, offer: FreeOffer, pid: str) -> ClaimResult:
         """The older store.ubisoft.com product page: one giveaway click, proven free."""
-        user = await _read_user(page)
+        user = await _read_user_settled(page)
         if isinstance(user, dict) and user.get("isLoggedIn") is False:
             raise NeedsAttention(
                 "This account is signed out of the Ubisoft Store. Sign in again "
@@ -760,6 +760,41 @@ class UbisoftAdapter(BaseAdapter):
     async def _shot(self, page: Page, offer: FreeOffer, tag: str) -> str | None:
         account_id = int(offer.extra.get("account_id") or 0)
         return await screenshot(page, screenshot_name(account_id, self.store, tag))
+
+
+# How long to let the store pick a session up before believing "signed out".
+# Measured on the live install, 23 Nov 2026: a signed-in profile, opened fresh,
+# is served `window.User.isLoggedIn: false` first; the page then checks the
+# Ubisoft Connect session itself, reloads, and reads `true` with the avatar in
+# the header - seconds later. Reading once at DOMContentLoaded reported a
+# signed-in account as signed out (Epic's 0.1.39 lesson in another shape).
+SESSION_SETTLE_S = 15.0
+
+
+async def _read_user_settled(page: Page, seconds: float = SESSION_SETTLE_S):
+    """`window.User`, waiting out the store's own session pickup.
+
+    Returns as soon as it reads signed in; otherwise keeps looking until the
+    time is up and returns the last thing it read (None if never readable).
+    Reads only - the page does the pickup on its own.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    last = None
+    while True:
+        user = await _read_user(page)
+        if isinstance(user, dict):
+            if user.get("isLoggedIn") is True:
+                return user
+            last = user
+        if loop.time() >= deadline:
+            if isinstance(last, dict) and last.get("isLoggedIn") is False:
+                logger.info("Ubisoft: still signed out after %.0fs on %s.", seconds, page.url)
+            return last
+        try:
+            await page.wait_for_timeout(1000)
+        except Exception:
+            return last
 
 
 async def _read_user(page: Page):

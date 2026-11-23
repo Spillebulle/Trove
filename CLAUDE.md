@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.44. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.45. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -92,6 +92,36 @@ restart. The smoke workflow proves a cookie persists across close-and-reopen
 (`tools/cookie_persist.py`) and that the flags are on the un-driven window's
 command line. Keep "Remember me" checked at sign-in too: without it Epic's auth
 is a session cookie that no store can persist across a browser restart.
+
+**A login that lasts until the browser closes (0.1.45).** That last sentence
+was wrong as a rule: a session cookie *can* survive a restart, and three stores
+need it to. Fanatical, Humble and IndieGala were all signed in by hand on
+23 Nov 2026 and all read "signed out" at the check straight after. Their
+profiles held **no login cookie at all** - only tracking and CSRF cookies -
+and plain Chrome on copies agreed (Humble `{"status":"anonymous"}`, IndieGala
+`userIsLogged = false`, Fanatical "Sign in"). Those stores sign a person in
+with a *browser-session* cookie (IndieGala's login has no remember-me box at
+all), and Chrome drops session cookies when it starts unless it is set to
+"Continue where you left off". So the sign-in window had the session and the
+run's Chrome threw it away on launch.
+
+`QUIET_PREFS` now sets `session.restore_on_startup = 1`, and `quiet_profile`
+(which runs before every launch, driven and un-driven) clears the saved tabs
+in **both** `Default/Sessions` and `Default/Sessions_Encrypted` so the setting
+keeps the cookies and restores no pages. Measured in the container on a
+throwaway profile: as before, a session cookie is gone after the reopen; with
+the setting it survives; with only `Sessions` cleared the restored tabs grew
+by one per launch (three, four, five); with both cleared, three reopens kept
+the cookie with one tab each. It is an ordinary Chrome setting and changes
+nothing about any cookie. `tools/session_keep_sim.py` pins it. Accounts signed
+in before 0.1.45 lost their session already and need one more sign-in.
+
+**Ubisoft serves "signed out" first (0.1.45).** The same day's Ubisoft check
+said signed out over a screenshot with the avatar in it. A fresh profile is
+served `window.User.isLoggedIn: false`; the page then checks the Ubisoft
+Connect session itself and reads `true` seconds later (14 s probe: `true`,
+with the id). `ubisoft._read_user_settled` waits up to `SESSION_SETTLE_S` for
+that, reading only.
 
 **On stored store credentials (0.1.7).** An account *may* hold an encrypted
 sign-in email, password and TOTP secret, and the rule about them is narrow
@@ -1744,6 +1774,7 @@ backend/.venv/Scripts/python tools/indiegala_sim.py    # IndieGala freebies
 backend/.venv/Scripts/python tools/ubisoft_sim.py      # Ubisoft giveaways
 backend/.venv/Scripts/python tools/fanatical_sim.py    # Fanatical, zero-total cart
 backend/.venv/Scripts/python tools/humble_sim.py       # Humble store + Choice
+backend/.venv/Scripts/python tools/session_keep_sim.py # session cookies survive
 ```
 
 When there is a real test suite, put how to run a single test here.

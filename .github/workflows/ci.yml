@@ -119,3 +119,6 @@ jobs:
 
       - name: Fanatical - giveaways only, and a cart that must total zero
         run: python tools/fanatical_sim.py
+
+      - name: A browser-session sign-in survives the handover to a run
+        run: python tools/session_keep_sim.py

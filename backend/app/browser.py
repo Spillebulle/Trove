@@ -526,7 +526,38 @@ QUIET_PREFS = {
     },
     # The autofill dropdown, which opens over the field under it.
     "autofill": {"profile_enabled": False, "credit_card_enabled": False},
+    # "Continue where you left off". Not for the tabs - `_forget_open_tabs`
+    # clears those before every launch - but because it is what makes Chrome
+    # keep a site's *browser-session* cookies across a restart. Fanatical,
+    # Humble and IndieGala sign a person in with exactly that kind of cookie,
+    # so the session made in the sign-in window was dropped the moment the
+    # run's Chrome started, and every check read "signed out" (measured on the
+    # live install, 23 Nov 2026: no login cookie left in any of the three
+    # profiles). An ordinary Chrome setting, the one most people browse with;
+    # nothing about a cookie is changed or forged.
+    "session": {"restore_on_startup": 1},
 }
+
+# Where Chrome keeps the tabs it would restore. Both exist on Chrome 151; with
+# only `Sessions` cleared, measured, the restored tabs still grew by one per
+# launch - a run every few hours would be a browser opening dozens of store
+# pages at once within a week.
+SESSION_TAB_DIRS = ("Sessions", "Sessions_Encrypted")
+
+
+def _forget_open_tabs(profile_path: Path) -> None:
+    """Remove the saved tabs, so "continue where you left off" restores none.
+
+    Measured in the container: with these gone and the preference on, a
+    browser-session cookie survives three reopens running and Chrome opens
+    exactly one tab each time. Never fatal - the worst a failure costs is an
+    extra tab.
+    """
+    for name in SESSION_TAB_DIRS:
+        try:
+            shutil.rmtree(profile_path / "Default" / name, ignore_errors=True)
+        except Exception as exc:  # pragma: no cover - rmtree already ignores
+            logger.debug("Could not clear %s in %s: %s", name, profile_path.name, exc)
 
 
 def _merge(into: dict, updates: dict) -> bool:
@@ -657,6 +688,7 @@ def quiet_profile(profile_path: Path) -> None:
     unexpected is logged and left exactly as it was found - including a
     Preferences file that will not parse, which is Chrome's to repair.
     """
+    _forget_open_tabs(profile_path)
     prefs_path = profile_path / "Default" / "Preferences"
     try:
         if prefs_path.exists():
