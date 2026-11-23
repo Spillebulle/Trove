@@ -186,6 +186,17 @@ in" and `bsauth` stayed a 129-character anonymous token - so Fanatical did
 not take it, silently, and why is not established. A submitted sign-in the
 store does not take now pauses too (0.1.48), rather than repeating every 12 h.
 
+**And Humble now signs in with no person (0.1.51), once its owner turned on
+an authenticator app and stored the secret.** Three things had to be learned
+from it, each from one live attempt: an empty code field seconds after the
+code went in is the page still working, not a refusal (15 s, and only an
+error message refuses); the form "going away" once can be the next step
+loading, so it has to stay gone for two reads; and Humble's second step is
+a chooser - "Send code to <email>" or "Use your Authenticator App (TOTP)" -
+where the authenticator is pressed and the email code never is. The attempt
+ends by loading the store's own page so the login host's handover can set
+the store's session before Chrome closes.
+
 ## Design
 
 UI follows `../Design-Principles/STYLE-GUIDE.md` and uses its `tokens.css`;
