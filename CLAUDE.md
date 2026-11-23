@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.47. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.48. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -174,6 +174,17 @@ the launch disables occlusion tracking on Windows only; and submitting is a
 trusted click on the form's own button, with Enter only as the fallback.
 IndieGala's login always carries a reCAPTCHA checkbox, so it will always stop
 and ask.
+
+**First live run, 23 Nov 2026, on the three accounts then signed out:**
+IndieGala stopped at its reCAPTCHA checkbox (as expected). Humble's
+identifier-first form went through and the password was accepted, then Humble
+asked for an **emailed** security code, so it paused (an authenticator app on
+Humble, with its secret stored in Trove, would let it finish). Fanatical's
+`/account/login` showed the form for a moment between loading spinners; the
+details went in and the form went away, but the store front still said "Sign
+in" and `bsauth` stayed a 129-character anonymous token - so Fanatical did
+not take it, silently, and why is not established. A submitted sign-in the
+store does not take now pauses too (0.1.48), rather than repeating every 12 h.
 
 ## Design
 

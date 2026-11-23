@@ -783,15 +783,15 @@ async def auto_signin(account_id: int) -> tuple[bool, str]:
             # reason says why; nothing more to add.
             return False, check_sentence
         why = (
-            "the details went in, but the store still reads it as signed out"
+            f"The details went in, but {store_name} still reads it as signed out."
             if outcome.submitted
-            else outcome.sentence[0].lower() + outcome.sentence[1:]
+            else outcome.sentence
         )
-        reason = (
-            f"Trove tried to sign in by itself: {why.rstrip('.')}. "
-            'Sign in with "Sign in here".'
-        )
-        account.auto_signin_paused = outcome.pause
+        reason = f'Trove tried to sign in by itself. {why} Sign in with "Sign in here".'
+        # A sign-in the store quietly did not take is not retried either:
+        # the same details into the same form every twelve hours, failing
+        # the same way, is the pattern bot detection exists to notice.
+        account.auto_signin_paused = outcome.pause or outcome.submitted
         _set_status(db, account, "needs_attention", reason, account.status_screenshot)
         notify.send_soon(
             "attention",
