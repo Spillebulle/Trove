@@ -688,6 +688,10 @@ async def check_session(account_id: int, auto: bool = True) -> tuple[bool, str]:
 # --- Signing back in by itself ------------------------------------------------
 
 _auto_signin_tasks: dict[int, asyncio.Task] = {}
+# One automatic sign-in at a time across the whole app: they are rare, and
+# three Chromes typing into three stores in the same second is neither
+# polite nor easier to read in a log.
+_auto_signin_turn = asyncio.Lock()
 
 
 def auto_signin_blocker(db: Session, account: Account) -> str | None:
@@ -742,10 +746,11 @@ async def auto_signin(account_id: int) -> tuple[bool, str]:
 
     logger.info("Signing %s (%s) back in by itself.", label, store_name)
     try:
-        outcome = await autosignin.attempt(
-            account_id, profile, adapter.sign_in_page, email, password,
-            totp=(lambda: totp_code(secret)) if secret else None, store_name=store_name,
-        )
+        async with _auto_signin_turn:
+            outcome = await autosignin.attempt(
+                account_id, profile, adapter.sign_in_page, email, password,
+                totp=(lambda: totp_code(secret)) if secret else None, store_name=store_name,
+            )
     except ProfileBusy as exc:
         return False, str(exc)
     except Exception as exc:

@@ -202,7 +202,21 @@ async def resolve_channel(playwright: Playwright, profile_path: Path) -> str | N
     global _channel
     if _channel is not False:
         return _channel  # type: ignore[return-value]
+    # Several browsers can start in the same instant after a restart (three
+    # automatic sign-ins did, 23 Nov 2026), and three probes sharing one
+    # probe directory deleted it from under each other. One probe; the rest
+    # wait for its answer.
+    async with _channel_lock:
+        if _channel is not False:
+            return _channel  # type: ignore[return-value]
+        return await _probe_channel(playwright, profile_path)
 
+
+_channel_lock = asyncio.Lock()
+
+
+async def _probe_channel(playwright: Playwright, profile_path: Path) -> str | None:
+    global _channel
     probe_dir = profile_path.parent / ".channel-probe"
     for candidate in _channel_candidates():
         launched = False
@@ -452,6 +466,12 @@ def purge_profile(path: Path) -> list[str]:
         return failed
 
     def _retry(func, target, _exc):
+        # Only a deletion is worth retrying after a chmod. `rmtree` also
+        # reports failures of `os.open`/`os.scandir`, which take more than a
+        # path - calling them back with one raised a TypeError that escaped.
+        if func not in (os.unlink, os.remove, os.rmdir):
+            failed.append(Path(target).name)
+            return
         try:
             os.chmod(target, stat.S_IWRITE)
             func(target)
