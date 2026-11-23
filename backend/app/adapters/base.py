@@ -321,6 +321,9 @@ class BaseAdapter(ABC):
         return None
     # A sentence for the add-account page saying what this adapter does and
     # does not do.
+    # A few words for the store's card on the add-account page. The blurb is
+    # the full story (terms included) and sits one click further in.
+    tagline: str = ""
     blurb: str = ""
 
     REQUIREMENTS: list[Requirement] = []

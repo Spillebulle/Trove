@@ -27,6 +27,8 @@ export interface StoreRequirement {
 export interface StoreInfo {
   store: string
   display_name: string
+  /** A few words for the store's card. */
+  tagline: string
   blurb: string
   login_url: string
   requirements: StoreRequirement[]

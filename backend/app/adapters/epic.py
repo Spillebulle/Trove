@@ -483,6 +483,7 @@ class EpicAdapter(BaseAdapter):
         "Tick “Remember me” before you press this. Without it Epic signs you "
         "in with a session cookie, which no profile can keep across a restart."
     )
+    tagline = "The weekly free game"
     blurb = (
         "Claims the weekly giveaway. Sign in once through the live view and "
         "Trove reuses that session; it never stores your password."

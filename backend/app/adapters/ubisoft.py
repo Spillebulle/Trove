@@ -436,6 +436,7 @@ class UbisoftAdapter(BaseAdapter):
         "a restart. Ubisoft may ask for a code from your authenticator or by "
         "email after the password."
     )
+    tagline = "Giveaway alerts"
     blurb = (
         "Watches the Ubisoft Store for its occasional giveaways - a paid game "
         "free to keep for a limited time. Free-to-play games, free weekends and "

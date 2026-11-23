@@ -312,6 +312,7 @@ class GogAdapter(BaseAdapter):
         "Continue. It is emailed rather than generated, so the Code button "
         "cannot fill it in."
     )
+    tagline = "Occasional giveaways"
     blurb = (
         "Claims GOG's occasional giveaways from the store front page. Sign in "
         "once through the sign-in window and Trove reuses that session. Heads "

@@ -5,7 +5,7 @@
  * interval and two actions, which is more than a 32px row holds without
  * becoming a table nobody can read on a phone.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Users } from 'lucide-react'
@@ -163,6 +163,26 @@ function AddAccountDialog({
   const [store, setStore] = useState('')
   const [label, setLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const nameRef = useRef<HTMLInputElement>(null)
+  // A missing name is said, not just implied by a greyed-out button: a
+  // disabled Add with no reason was a dead end. Pressing Add with no name
+  // scrolls to the field, outlines it and says what it wants.
+  const [nameMissing, setNameMissing] = useState(false)
+
+  const close = () => {
+    setNameMissing(false)
+    onClose()
+  }
+
+  const submit = () => {
+    if (!label.trim()) {
+      setNameMissing(true)
+      nameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      nameRef.current?.focus({ preventScroll: true })
+      return
+    }
+    create.mutate()
+  }
 
   const chosen = stores.find((item) => item.store === store) ?? stores[0]
   const activeStore = store || stores[0]?.store || ''
@@ -181,20 +201,20 @@ function AddAccountDialog({
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Add an account"
-      subtitle="Name the account so you will recognise it, then pick its store."
+      subtitle="Name it, then pick its store."
       size="small"
       footer={
         <>
-          <button type="button" className="btn-ghost" onClick={onClose}>
+          <button type="button" className="btn-ghost" onClick={close}>
             Cancel
           </button>
           <button
             type="button"
             className="btn-primary"
-            disabled={!label.trim() || !activeStore || create.isPending}
-            onClick={() => create.mutate()}
+            disabled={!activeStore || create.isPending}
+            onClick={submit}
           >
             {create.isPending && <Spinner />}
             Add
@@ -213,21 +233,29 @@ function AddAccountDialog({
          */}
         <Field
           label="Name"
-          hint="Only for you. Two accounts on the same store need telling apart."
-          error={error}
+          hint="Only for you, to tell accounts apart."
+          error={nameMissing ? 'Give the account a name first.' : error}
         >
           <input
-            className="field"
+            ref={nameRef}
+            className={'field' + (nameMissing ? ' border-critical focus:border-critical' : '')}
+            aria-invalid={nameMissing || undefined}
             value={label}
-            onChange={(event) => setLabel(event.target.value)}
+            onChange={(event) => {
+              setLabel(event.target.value)
+              if (event.target.value.trim()) setNameMissing(false)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submit()
+            }}
             placeholder="Main Epic account"
             maxLength={120}
           />
         </Field>
 
         {/*
-         * Cards rather than a dropdown, because each store carries a sentence
-         * about what it needs and a dropdown has nowhere to put one. Written
+         * Cards rather than a dropdown, because each store carries its mark and
+         * a few words, and a dropdown has nowhere to put either. Written
          * as a grid from the start, which is why going from one adapter to
          * five needed no layout change here.
          */}
@@ -244,7 +272,7 @@ function AddAccountDialog({
                     : 'hover:border-line-dashed')
                 }
               >
-                <span className="flex items-start gap-2">
+                <span className="flex items-center gap-3">
                   <input
                     type="radio"
                     name="store"
@@ -252,11 +280,14 @@ function AddAccountDialog({
                     checked={item.store === activeStore}
                     onChange={() => setStore(item.store)}
                   />
+                  <span className="text-fg">
+                    <StoreBadge store={item.store} />
+                  </span>
                   <span className="min-w-0">
                     <span className="block text-control font-semibold text-strong">
                       {item.display_name}
                     </span>
-                    <span className="mt-0.5 block text-small text-dim">{item.blurb}</span>
+                    <span className="block truncate text-small text-dim">{item.tagline}</span>
                   </span>
                 </span>
               </label>
@@ -264,22 +295,40 @@ function AddAccountDialog({
           </div>
         </fieldset>
 
-        {chosen && chosen.requirements.length > 0 && (
+        {/*
+         * Short by default. The store's full story - what it claims, what it
+         * cannot, and the plain word on its terms - is one click in rather
+         * than a wall of text on every card. The requirement names stay
+         * visible, because "Accepting the risk" should be seen before Add.
+         */}
+        {chosen && (
           <div className="well p-3">
-            <p className="eyebrow mb-2">What this needs</p>
-            <ul className="flex flex-col gap-2">
-              {chosen.requirements.map((requirement) => (
-                <li key={requirement.name}>
-                  <span className="block text-control text-fg">
-                    {requirement.name}
-                    {!requirement.required && (
-                      <span className="ml-1.5 text-tiny text-dim">optional</span>
-                    )}
-                  </span>
-                  <span className="block text-small text-dim">{requirement.description}</span>
-                </li>
-              ))}
-            </ul>
+            {chosen.requirements.length > 0 && (
+              <>
+                <p className="eyebrow mb-1">What this needs</p>
+                <ul className="flex flex-wrap gap-x-3 gap-y-1 text-small text-fg">
+                  {chosen.requirements.map((requirement) => (
+                    <li key={requirement.name}>
+                      {requirement.name}
+                      {!requirement.required && <span className="ml-1 text-tiny text-dim">optional</span>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <details className="mt-2 text-small text-dim">
+              <summary className="cursor-pointer text-accent hover:brightness-110">
+                More about {chosen.display_name}
+              </summary>
+              <p className="mt-2">{chosen.blurb}</p>
+              <ul className="mt-2 flex flex-col gap-1.5">
+                {chosen.requirements.map((requirement) => (
+                  <li key={requirement.name}>
+                    <span className="text-fg">{requirement.name}:</span> {requirement.description}
+                  </li>
+                ))}
+              </ul>
+            </details>
           </div>
         )}
       </div>

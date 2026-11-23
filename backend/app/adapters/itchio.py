@@ -273,6 +273,7 @@ class ItchAdapter(BaseAdapter):
         "types where the window's focus already is, and cannot see where that "
         "is. Either your itch.io username or your address works in that field."
     )
+    tagline = "Games on 100%-off sales"
     blurb = (
         "Claims games whose itch.io sale is 100% off, so they stay in your "
         "library after the sale ends. Plainly: automated claiming may be "

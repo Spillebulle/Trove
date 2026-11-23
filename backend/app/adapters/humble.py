@@ -699,6 +699,7 @@ class HumbleAdapter(BaseAdapter):
     # one "Enter your E-Mail" field and Continue, like Epic's) but the password
     # step and where focus lands were not seen. An Enter typed into the wrong
     # step is a failed login attempt. The one-at-a-time buttons still work.
+    tagline = "Free games and Humble Choice"
     blurb = (
         "Claims the Humble Store's occasional free games and, if you subscribe "
         "to Humble Choice, redeems this month's games and keeps their keys in "

@@ -352,6 +352,7 @@ class PrimeAdapter(BaseAdapter):
     # To fill it in: open the sign-in window, look at the form, and write down
     # whether the fields share a page (Tab between them) or the store asks for
     # the name first and the password on a second step (Enter, then a wait).
+    tagline = "Monthly Prime Gaming games"
     blurb = (
         "Claims the monthly keep-forever games. Needs an active Amazon Prime "
         "subscription. Amazon's login is the most bot-hostile of the set: sign "

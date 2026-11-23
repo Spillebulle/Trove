@@ -365,6 +365,7 @@ class SteamAdapter(BaseAdapter):
         "not take an address. Steam Guard will still ask for a code, which the "
         "Code button types."
     )
+    tagline = "Free-to-keep promotions"
     blurb = (
         "Claims Steam's occasional “free to keep” promotions - a paid game "
         "temporarily 100% off that stays in your library. They are rare and "

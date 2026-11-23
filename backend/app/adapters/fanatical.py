@@ -593,6 +593,7 @@ class FanaticalAdapter(BaseAdapter):
         "Keep “remember me” on when you sign in, or the session will "
         "not survive a restart."
     )
+    tagline = "Free Steam-key giveaways"
     blurb = (
         "Claims Fanatical's occasional free Steam-key giveaways: puts the free "
         "game in an otherwise empty cart, checks out only at a zero total, and "

@@ -68,6 +68,7 @@ def known_stores() -> list[dict]:
             {
                 "store": key,
                 "display_name": adapter.display_name,
+                "tagline": adapter.tagline,
                 "blurb": adapter.blurb,
                 "login_url": adapter.login_url,
                 "requirements": [

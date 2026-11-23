@@ -331,6 +331,7 @@ class IndieGalaAdapter(BaseAdapter):
         "there. Click the Email field before pressing this, since Trove types "
         "wherever the window's focus already is."
     )
+    tagline = "Free DRM-free indie games"
     blurb = (
         "Claims IndieGala's galaFreebies - free DRM-free games added to your "
         "IndieGala library. Plainly: IndieGala's terms forbid automated "
