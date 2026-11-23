@@ -13,6 +13,7 @@ Needs real Chrome and a display; runs in container-smoke.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import sqlite3
@@ -44,12 +45,27 @@ class Handler(BaseHTTPRequestHandler):
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
+
+
+async def _resolve() -> None:
+    # What `open_local` does first: decide the sandbox, so the window gets
+    # `--no-sandbox` where Chrome needs it (a CI runner) and dies otherwise.
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        await browser.resolve_channel(p, Path(tempfile.mkdtemp()))
+
+
+asyncio.run(_resolve())
 profile = Path(tempfile.mkdtemp()) / "profile"
 profile.mkdir()
 browser.quiet_profile(profile)
 launched = browser.launch_detached(profile, f"http://127.0.0.1:{server.server_address[1]}/")
 proc = launched[0] if isinstance(launched, tuple) else launched
 time.sleep(5)
+if proc.poll() is not None:
+    print(f"FAILED: Chrome exited on its own (code {proc.returncode}) before the close")
+    sys.exit(1)
 browser._quit_soon(proc)
 proc.wait(timeout=browser.QUIT_GRACE_S + 10)
 time.sleep(2)
