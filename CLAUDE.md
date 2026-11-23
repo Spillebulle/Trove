@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.55. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.56. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -245,15 +245,19 @@ pins it in container-smoke.
 **IndieGala's first signed-in run recorded all eight freebies "already owned"
 and claimed nothing (0.1.55).** The unverified `OWNED` list matched
 `a[href*="/library"]`, and every freebie page's help text links to
-`www.indiegala.com/library` twice. Read signed in on a copy of the profile:
-**the page never states ownership** - the button is `button
-#loginBeforeAddToLibrary onclick="addToLibrary(...)"` "ADD TO LIBRARY" either
-way - and the page's own `addToLibrary` POSTs
-`/developers/ajax/add-to-library/<uuid>/<slug>/freebies`, whose JSON `status`
-is `ok` (added), `added` (already had it), `login` or an error. So the claim
-presses (harmless when owned) and takes the reply as the verdict
-(`reply_verdict`), with the button-container markers as fallback; `is_owned`
-is nearly always "could not tell". The eight false rows were deleted from the
+`www.indiegala.com/library` twice. Read signed in on a copy of the profile,
+before and after claiming: an unowned freebie's
+`.developer-product-download-button-cont` holds `button
+#loginBeforeAddToLibrary onclick="addToLibrary(...)"` "ADD TO LIBRARY"; an
+owned one's holds only an icon link `a.developer-product-download-button-login
+[href="https://www.indiegala.com/library"]` - **the same class as the
+signed-out login button** (whose href is `#`), so `SIGNED_OUT` excludes a
+library href (0.1.56) or an owned page would read signed out. `OWNED` is
+scoped to the button container. The button's `addToLibrary` POSTs
+`/developers/ajax/add-to-library/<uuid>/<slug>/freebies`, whose JSON
+`status` is `ok` (added), `added` (already had it), `login` or an error; the
+claim takes that reply as its verdict (`reply_verdict`). First real run after
+the fix: all eight answered `ok` and were claimed. The eight false rows were deleted from the
 live ledger so the next run claims them. **The general lesson: a loose
 "owned" selector is not fail-safe** - `None` is, but a false `True` writes a
 row that `_already_claimed` then honours forever. Ubisoft, Fanatical and

@@ -319,6 +319,11 @@ async def claim_checks() -> None:
     fake = FakePage({section, control}, texts={control: "ADD TO LIBRARY"}, reply="error")
     check("any other reply stops", await run(fake), "needs_attention")
     check("the help text's library link is not ownership", help_link in ig.OWNED, False)
+    fake = FakePage({section, ig.OWNED[0], help_link})
+    check("an owned page (library link in the button's place) is already_owned", await run(fake), ("already_owned", None))
+    check("and nothing was clicked", fake.clicks, [])
+    check("the owned library link is not read as signed out",
+          any("button-login" in s and ":not(" not in s for s in ig.SIGNED_OUT), False)
     check("the measured button is the first control", ig.ADD_TO_LIBRARY[0].endswith('button[onclick*="addToLibrary"]'), True)
     check("verdicts", [ig.reply_verdict(x) for x in ("ok", "added", "login", "", "nope")],
           ["claimed", "already_owned", "signed_out", "error", "error"])

@@ -166,7 +166,9 @@ CHALLENGE_TITLES = ("just a moment", "attention required", "one more step")
 # signed-out Download section's redirect-to-login button.
 SIGNED_OUT = [
     '.header-top-notlogged a:has-text("Login")',
-    'a.developer-product-download-button-login',
+    # The same class is IndieGala's library link on a freebie the account
+    # owns (measured signed in, 23 Nov 2026), so a library href is excluded.
+    'a.developer-product-download-button-login:not([href*="indiegala.com/library"])',
 ]
 
 # MEASURED: the product page's Download section (signed out). Its presence is
@@ -190,19 +192,18 @@ ADD_TO_LIBRARY = [
     '.developer-product-download a:has-text("Get")',
 ]
 
-# MEASURED from the page's own `addToLibrary` (23 Nov 2026): **a freebie page
-# never says whether the account owns the game.** The button reads ADD TO
-# LIBRARY either way, and the help text under it always carries two links to
-# `www.indiegala.com/library` - which the first, unverified version of this
-# list matched (`a[href*="/library"]`), so every freebie read "already owned"
-# and nothing was ever claimed. Ownership is learnt only by pressing the
-# button: it POSTs `/developers/ajax/add-to-library/<uuid>/<slug>/freebies`
-# and the JSON `status` is `ok` (added now), `added` (already had it),
-# `login` (signed out) or anything else (an error). The press is harmless for
-# an owned game. After `ok` the button turns `-button-success` "Added!" for
-# 2 s; after `ok` or `added` the button is replaced by a library link *inside
-# the button's container* - which is what these two read, scoped so the help
-# text's links can never match again.
+# MEASURED signed in, 23 Nov 2026, before and after claiming the same games.
+# An unowned freebie's button container holds the ADD TO LIBRARY button; an
+# owned one's holds only an icon link, `a.developer-product-download-button-
+# login[href="https://www.indiegala.com/library"]`, and no add-to-library
+# script at all. The help text under both always links to the library too -
+# which the first, unverified version of this list matched (`a[href*=
+# "/library"]`, unscoped), so every freebie read "already owned" and nothing
+# was ever claimed. So OWNED is scoped to the button's container. Pressing the
+# button POSTs `/developers/ajax/add-to-library/<uuid>/<slug>/freebies`, whose
+# JSON `status` is `ok` (added now), `added` (already had it), `login` or an
+# error - the claim's verdict. After `ok` the button turns `-button-success`
+# "Added!" for 2 s and is then replaced by the library link.
 ADD_TO_LIBRARY_REPLY = "/developers/ajax/add-to-library/"
 ADDED_NOW = ['.developer-product-download-button-success']
 OWNED = ['.developer-product-download-button-cont a[href*="indiegala.com/library"]']
@@ -466,11 +467,10 @@ class IndieGalaAdapter(BaseAdapter):
             await _goto(page, offer.url)
         except PlaywrightTimeout:
             return None
-        if await _first_visible(page, OWNED, timeout_ms=1000):
+        if await _first_visible(page, OWNED, timeout_ms=3000):
             return True
-        # A freebie page does not say whether the account owns the game (see
-        # OWNED), so this is nearly always "could not tell" - never "not
-        # owned". The claim's press is what finds out, harmlessly.
+        # No library link in the button's container is "could not tell", never
+        # "not owned": the claim's press, and IndieGala's reply, decide.
         return None
 
     # ── Claiming ─────────────────────────────────────────────────────────
@@ -506,6 +506,9 @@ class IndieGalaAdapter(BaseAdapter):
             ) from None
 
         await self._guard(page, offer)
+
+        if await _first_visible(page, OWNED, timeout_ms=2500):
+            return ClaimResult(outcome="already_owned", detail="Already in your IndieGala library.")
 
         section = await _first_visible(page, DOWNLOAD_SECTION, timeout_ms=5000)
         if section is None:
