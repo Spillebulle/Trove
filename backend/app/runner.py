@@ -750,6 +750,7 @@ async def auto_signin(account_id: int) -> tuple[bool, str]:
             outcome = await autosignin.attempt(
                 account_id, profile, adapter.sign_in_page, email, password,
                 totp=(lambda: totp_code(secret)) if secret else None, store_name=store_name,
+                landing_url=adapter.login_url,
             )
     except ProfileBusy as exc:
         return False, str(exc)

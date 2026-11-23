@@ -118,7 +118,7 @@ _INSPECT_JS = r"""
           || null;
   }
   if (submit) submit.setAttribute('data-trove-auto', 'submit');
-  const alerts = [...document.querySelectorAll('[role=alert], [aria-live=assertive], [class*=error i], [class*=alert i]')]
+  const alerts = [...document.querySelectorAll('[role=alert], [aria-live=assertive], [class*=error i], [class*=alert i], [data-testid*=message i], [class*=message i]')]
     .filter(visible).map(e => e.innerText.trim()).filter(t => t && t.length < 300);
   const error = alerts.find(t => /incorrect|invalid|wrong|not (be )?(found|recogni[sz]ed)|doesn.t match|did not match|too many|try again later|locked|couldn.t sign|unable to sign/i.test(t)) || null;
   return JSON.stringify({
@@ -237,6 +237,7 @@ async def attempt(
     password: str,
     totp=None,
     store_name: str = "the store",
+    landing_url: str | None = None,
 ) -> Outcome:
     """One automatic sign-in on this profile, starting at `url`.
 
@@ -257,13 +258,24 @@ async def attempt(
             await cdp.call("Page.bringToFront")
             await cdp.navigate(url)
             await _wait_for_page(port)
-            return await _drive(cdp, port, email, password, totp, store_name)
+            outcome = await _drive(cdp, port, email, password, totp, store_name)
+            if outcome.submitted and landing_url:
+                # Finish on the store's own page before the browser closes. A
+                # store whose login lives on another host (Humble's
+                # auth.humblebundle.com) sets the store's session on the way
+                # back; closing mid-redirect left the login host signed in and
+                # the store signed out (measured, 23 Nov 2026).
+                await cdp.navigate(landing_url)
+                await _wait_for_page(port)
+                await asyncio.sleep(STEP_WAIT_S * 2)
+            return outcome
 
 
 async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_name: str) -> Outcome:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + ATTEMPT_S
     typed_user = typed_password = typed_code = followed_frame = False
+    code_judged_at = 0.0
     empty_reads = 0
     while loop.time() < deadline:
         state = await cdp.inspect()
@@ -286,6 +298,12 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
         user, pw, code = state.get("user"), state.get("password"), state.get("code")
         if code and code.get("empty"):
             if typed_code:
+                # An empty code field seconds after the code went in is as
+                # likely the page still working as a refusal; a refusal comes
+                # with an error, caught above. Give it until `code_judged_at`.
+                if loop.time() < code_judged_at:
+                    await asyncio.sleep(STEP_WAIT_S)
+                    continue
                 return Outcome(False, f"{store_name} did not accept the authenticator code.", pause=True)
             if totp is None:
                 return Outcome(
@@ -297,6 +315,7 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
             await cdp.type_into("code", totp())
             await cdp.submit(state)
             typed_code = True
+            code_judged_at = loop.time() + 15
         elif pw and pw.get("empty"):
             if typed_password:
                 return Outcome(False, f"{store_name} showed the password field again after the password went in.", pause=True)
@@ -320,7 +339,7 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
             await cdp.evaluate("document.querySelector('[data-trove-auto=user]')?.focus()")
             await cdp.submit(state)
             typed_user = True
-        elif typed_password and not pw and not user:
+        elif (typed_password or typed_code) and not pw and not user and not code:
             # The form is gone and nothing objected. Give the store a moment to
             # finish its redirects, then let the session check say what it is.
             await asyncio.sleep(STEP_WAIT_S * 2)
@@ -335,10 +354,10 @@ async def _drive(cdp: _Cdp, port: int, email: str, password: str, totp, store_na
         else:
             empty_reads += 1
             if empty_reads >= EMPTY_READS_BEFORE_GIVING_UP:
-                if typed_password:
+                if typed_password or typed_code:
                     return Outcome(True, "The sign-in details went in.")
                 return Outcome(False, f"Trove could not find a sign-in form on {store_name}'s page.")
         await asyncio.sleep(STEP_WAIT_S + random.uniform(0, 1.5))
-    if typed_password:
+    if typed_password or typed_code:
         return Outcome(True, "The sign-in details went in.")
     return Outcome(False, f"The sign-in on {store_name} did not finish within {ATTEMPT_S:.0f} seconds.")
