@@ -38,8 +38,10 @@ import logging
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1000,14 +1002,62 @@ async def _close_gracefully(port: int, proc: subprocess.Popen) -> None:
     await asyncio.to_thread(_stop_process, proc)
 
 
+# How long Chrome gets to shut down on SIGINT before it is terminated.
+QUIT_GRACE_S = 15.0
+
+
+def _ask_to_quit(proc: subprocess.Popen) -> None:
+    """Ask Chrome to shut down in the way that keeps its cookies.
+
+    **SIGTERM loses every cookie set in the last ~30 s; SIGINT keeps them.**
+    Measured in the container, 23 Nov 2026, on throwaway profiles with a page
+    setting one session and one persistent cookie: terminated 5, 8 or 20 s
+    after the page loaded the cookie database held neither (only at 40 s, past
+    Chrome's periodic flush, did both survive); sent SIGINT or SIGHUP, both
+    cookies were there every time, Chrome exiting in under a second. A person
+    who signs in and presses Done straight away is exactly the 20 s case - it
+    is why IndieGala, whose login is a cookie, kept reading signed out while
+    Fanatical, whose login is in localStorage, did not. Windows has no SIGINT
+    for a child process, so there it stays `terminate()` (a window close).
+    """
+    if os.name == "nt":
+        proc.terminate()
+    else:
+        proc.send_signal(signal.SIGINT)
+
+
 def _stop_process(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
         return
-    proc.terminate()
+    _ask_to_quit(proc)
     try:
-        proc.wait(timeout=15)
+        proc.wait(timeout=QUIT_GRACE_S)
+        return
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+    try:
+        proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def _quit_soon(proc: subprocess.Popen) -> None:
+    """`_ask_to_quit`, then terminate in the background if it was not enough.
+
+    For a window something else is already waiting on (the `open_local`
+    watcher), so this must not block - and must not leave a Chrome that
+    ignored the signal holding the profile forever.
+    """
+    _ask_to_quit(proc)
+
+    def _fallback() -> None:
+        try:
+            proc.wait(timeout=QUIT_GRACE_S)
+        except subprocess.TimeoutExpired:
+            logger.info("Chrome did not quit within %.0f s; terminating it.", QUIT_GRACE_S)
+            proc.terminate()
+
+    threading.Thread(target=_fallback, daemon=True).start()
 
 
 @dataclass
@@ -1315,7 +1365,7 @@ class BrowserManager:
                             blank_polls * 2.0,
                         )
                         try:
-                            process.terminate()
+                            _quit_soon(process)
                         except OSError as exc:  # pragma: no cover - already gone
                             logger.debug("Closing the finished window: %s", exc)
                         # Not a `break`: let the loop see the process actually
@@ -1365,16 +1415,16 @@ class BrowserManager:
     def close_local(self, account_id: int) -> bool:
         """Ask the account's sign-in window to close. Returns whether there was one.
 
-        A polite terminate, not a kill: Chrome flushes its profile to disk on
-        SIGTERM (and on the close Windows sends), which is the whole point - the
-        session the person just created has to reach the directory. The waiter
+        SIGINT, not SIGTERM and not a kill: only SIGINT makes Chrome write the
+        cookies of the last half-minute (`_ask_to_quit`, measured), and the
+        session the person just created is exactly those cookies. The waiter
         in `open_local` sees the exit and releases the lock as usual.
         """
         entry = self._accounts.get(account_id)
         if entry is None or entry.process is None or entry.process.poll() is not None:
             return False
         try:
-            entry.process.terminate()
+            _quit_soon(entry.process)
         except OSError as exc:  # pragma: no cover - already gone
             logger.debug("Closing the sign-in window for %s: %s", account_id, exc)
             return False

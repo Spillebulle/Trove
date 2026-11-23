@@ -127,6 +127,12 @@ jobs:
           docker cp tools/autosignin_sim.py trove:/tmp/autosignin_sim.py
           docker exec -e PYTHONPATH=/app -e DATA_DIR=/tmp/autosignin-sim -u pwuser -w /app trove python /tmp/autosignin_sim.py
 
+      - name: Closing a sign-in window keeps its cookies
+        # SIGTERM lost every cookie of the last ~30 s; the close is SIGINT now.
+        run: |
+          docker cp tools/close_keeps_cookies_sim.py trove:/tmp/close_keeps_cookies_sim.py
+          docker exec -e PYTHONPATH=/app -e DATA_DIR=/tmp/close-sim -u pwuser -w /app trove python /tmp/close_keeps_cookies_sim.py
+
       - name: Which way did the sandbox go? (and does "on" still launch)
         # The default probe above already decided; this prints it, then forces
         # the sandbox on to see whether that alone launches. Non-fatal.

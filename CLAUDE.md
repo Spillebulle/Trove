@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.53. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.54. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -224,6 +224,23 @@ anything else - it says whether a challenge was left open.
 opens the checkout window itself for that link - once, only while
 `checkout_pending`, nothing holds the browser and a sign-in window can open,
 and the parameter is dropped so a reload opens nothing.
+
+**Closing a window must not lose the sign-in: SIGINT, never SIGTERM
+(0.1.54).** IndieGala was signed in by hand, Done pressed 20 s later, and
+the check read signed out with no login cookie in the profile at all. Measured
+in the container on throwaway profiles (a local page setting one session and
+one persistent cookie): **`terminate()` 5, 8 or 20 s after the page loaded
+left neither cookie in the database** - only at 40 s, past Chrome's periodic
+~30 s flush, did both survive - while **SIGINT or SIGHUP kept both every
+time**, Chrome exiting in under a second. Ctrl+Shift+Q through xdotool did not
+quit Chrome at all. So every Trove-initiated close (`close_local`, the
+auto-finish watch, `_stop_process`) goes through `browser._ask_to_quit`
+(SIGINT on POSIX, `terminate` on Windows) with a terminate fallback after
+`QUIT_GRACE_S`. This very likely explains every "I signed in and pressed
+Done, and it still says signed out" before it - the 0.1.24 note above that
+"Chrome flushes its profile on SIGTERM" was wrong. Fanatical survived only
+because its login lives in localStorage. `tools/close_keeps_cookies_sim.py`
+pins it in container-smoke.
 
 ## Design
 
@@ -1866,6 +1883,7 @@ backend/.venv/Scripts/python tools/fanatical_sim.py    # Fanatical, zero-total c
 backend/.venv/Scripts/python tools/humble_sim.py       # Humble store + Choice
 backend/.venv/Scripts/python tools/session_keep_sim.py # session cookies survive
 backend/.venv/Scripts/python tools/autosignin_sim.py   # needs real Chrome; also runs in container-smoke
+python tools/close_keeps_cookies_sim.py                # container-smoke only: a close keeps cookies
 ```
 
 When there is a real test suite, put how to run a single test here.
