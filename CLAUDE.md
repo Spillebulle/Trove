@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.42. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.43. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -175,6 +175,10 @@ would collide with the semantic ones on pages that are mostly state. Prime
 Gaming has no glyph in that set, so Amazon's mark stands in under the Prime
 Gaming name. A store key with no mark falls back to the plain text badge, so
 a new adapter renders without a frontend change.
+Fanatical and IndieGala are not in simple-icons: Fanatical's mark is the
+store's own pinned-tab SVG (one colour already, 16x16, even-odd), and
+IndieGala's is its 32px favicon - a disc with "IG" cut out - redrawn as circles
+and arcs. A mark may therefore carry its own `viewBox` and `evenOdd`.
 
 **The README banner is the family's, not this app's** (§17.4): `docs/images/
 banner.png` and `banner-paper.png`, 1354 x 461 on the theme's backdrop, mark
