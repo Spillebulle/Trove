@@ -270,29 +270,46 @@ def _undated_offers_end() -> bool:
     try:
         db.add_all([
             Offer(store="steam", external_id="u:listed", title="Undated, listed",
-                  last_seen_at=now - timedelta(hours=3)),
+                  last_seen_at=now - timedelta(hours=3), free_seen_at=now - timedelta(days=1)),
             Offer(store="steam", external_id="u:gone", title="Undated, gone",
-                  last_seen_at=now - timedelta(days=27)),
+                  last_seen_at=now - timedelta(days=27), free_seen_at=now - timedelta(days=30)),
             Offer(store="epic", external_id="d:old-sighting", title="Dated, not over",
-                  ends_at=now + timedelta(days=1), last_seen_at=now - timedelta(days=27)),
+                  ends_at=now + timedelta(days=1), last_seen_at=now - timedelta(days=27),
+                  free_seen_at=now - timedelta(days=28)),
             Offer(store="epic", external_id="d:over", title="Dated, over",
-                  ends_at=now - timedelta(hours=1), last_seen_at=now),
+                  ends_at=now - timedelta(hours=1), last_seen_at=now, free_seen_at=now),
+            # Next week's announcement: listed, not free yet - still shown.
+            Offer(store="epic", external_id="a:next", title="Announced, ahead",
+                  starts_at=now + timedelta(days=2), ends_at=now + timedelta(days=9),
+                  last_seen_at=now - timedelta(hours=1)),
+            # Alien: Isolation - announced, its week began, but the store gave
+            # something else and never listed it free. Not free now.
+            Offer(store="epic", external_id="a:swapped", title="Announced, withdrawn",
+                  starts_at=now - timedelta(days=5), ends_at=now + timedelta(days=2),
+                  last_seen_at=now - timedelta(days=8)),
+            # Announced, then dropped from the announcements before its start.
+            Offer(store="epic", external_id="a:dropped", title="Announced, unlisted",
+                  starts_at=now + timedelta(days=1), ends_at=now + timedelta(days=8),
+                  last_seen_at=now - timedelta(days=4)),
         ])
         db.commit()
-        titles = {o.title for o in list_offers(current=True, db=db)}
+        offers = list_offers(current=True, db=db)
+        titles = {o.title for o in offers}
+        started = {o.title for o in offers if o.starts_at is None or o.starts_at.replace(tzinfo=None) <= now.replace(tzinfo=None)}
         free_now = summary(db=db).free_now
     finally:
         db.close()
-    expected = {"Undated, listed", "Dated, not over"}
-    got = titles & {"Undated, listed", "Undated, gone", "Dated, not over", "Dated, over"}
+    expected = {"Undated, listed", "Dated, not over", "Announced, ahead"}
+    got = titles & {"Undated, listed", "Undated, gone", "Dated, not over", "Dated, over",
+                    "Announced, ahead", "Announced, withdrawn", "Announced, unlisted"}
     print("current offers:", sorted(got))
     ok = got == expected
     if not ok:
         print("FAIL: expected", sorted(expected))
     # The seeded rows from _seed() have no end date and were just seen, so they
     # count too; what matters is that the gone one does not.
-    print("summary free_now:", free_now, "| listed now:", len(titles))
-    if free_now != len(titles):
+    print("summary free_now:", free_now, "| started now:", len(started))
+    if free_now != len(started):
         print("FAIL: the dashboard count disagrees with the Free now list")
         ok = False
     return ok

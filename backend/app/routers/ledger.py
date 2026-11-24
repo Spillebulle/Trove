@@ -45,10 +45,19 @@ UNLISTED_AFTER = timedelta(days=2)
 
 
 def _not_ended(now):
-    """SQL for "this offer has not ended", dated or not."""
-    return (Offer.ends_at > now) | (
-        Offer.ends_at.is_(None) & (Offer.last_seen_at > now - UNLISTED_AFTER)
-    )
+    """SQL for "this offer has not ended", dated or not.
+
+    An announcement that never went live has ended too. Epic announced Alien:
+    Isolation for 19-26 Nov 2026, then gave Mark of the Deep that week
+    instead; the announced row kept its window, so once the start passed it
+    sat on Free now as unclaimed. A row that was never seen free
+    (`free_seen_at` null) counts only while its start is still ahead and the
+    store still lists the announcement.
+    """
+    listed = Offer.last_seen_at > now - UNLISTED_AFTER
+    live = (Offer.ends_at > now) | (Offer.ends_at.is_(None) & listed)
+    announced = Offer.starts_at.isnot(None) & (Offer.starts_at > now) & listed
+    return live & (Offer.free_seen_at.isnot(None) | announced)
 
 
 # ── Dashboard ───────────────────────────────────────────────────────────────

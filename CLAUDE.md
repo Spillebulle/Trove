@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.56. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.57. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -263,6 +263,15 @@ live ledger so the next run claims them. **The general lesson: a loose
 row that `_already_claimed` then honours forever. Ubisoft, Fanatical and
 Humble's `OWNED` lists are the same kind of guess; read their first
 `already_owned` rows with suspicion.
+
+**An announced giveaway can be withdrawn (0.1.57).** Epic announced Alien:
+Isolation for 19-26 Nov 2026 and then gave Mark of the Deep that week; the
+announced row kept its window, so once the start passed Free now listed it
+as unclaimed beside an account that had claimed everything there was. A
+row is free now only once discovery has seen it free (`free_seen_at`); an
+announcement shows only while its start is ahead and the store still lists
+it (`ledger._not_ended`). Claim runs were never affected - they claim from
+the live list only.
 
 ## Design
 
