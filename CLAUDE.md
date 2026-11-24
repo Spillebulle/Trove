@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Status: v0.1.57. The loop is closed - a real game has been claimed.** On 20
+**Status: v0.1.58. The loop is closed - a real game has been claimed.** On 20
 Aug 2026, in the container, against a live Epic account: discovery found the
 giveaway, the scheduler's run drove the checkout, Epic raised a captcha the
 driven browser cannot pass, the person finished that one order in the un-driven
@@ -798,6 +798,75 @@ the driver; it is a risk decision about the order, not a tell to remove. An
 unattended Epic claim would mean solving that puzzle, which this app does not
 do. "Finish the claim here" is the permanent shape of an Epic claim, not a
 workaround; the work worth doing is making that one step cheap.
+
+**Superseded the next day: Playwright IS what raises the checkout captcha
+(measured 24 Nov 2026, 0.1.58).** The paragraph above rests on one bare-CDP
+checkout of that week's giveaway. Repeated properly - in the live container,
+on a copy of the account's profile, software GL and all, on permanently free
+games (same Talon flow, `checkout_free_prod`, same hCaptcha site key
+`86194cdd-…`) - the result is the opposite, and it replicates:
+
+| Driver, same container, same profile | Result |
+|---|---|
+| Bare DevTools socket (`tools/epic_checkout_probe.py`), Firestone | order completed, no captcha |
+| Bare, with `Network.enable` and auto-attach to every frame, Fishing Planet | `getcaptcha` answered silently, `confirm-order` -> `"status":"COMPLETED"` |
+| Trove's run path (warm session, then Playwright attached), Metalstorm | interactive hCaptcha ("Click on the square"), twice |
+| Bare again, Metalstorm, one minute later | completed, no captcha |
+| `claim_unattached` (below), World of Warships | claimed |
+| Playwright session (health, `is_owned`), closed, then `claim_unattached`, SMITE 2 | claimed |
+
+Five of five bare, two of two attached, interleaved, so it is not the hour or
+the address. The container is not what Epic objects to either: llvmpipe,
+SwiftShader WebGPU, no media devices, no speech voices, and hCaptcha still
+passed without showing anything. The community reading (free-games-claimer
+#483: "captcha in Docker is the GPU") does not hold here.
+
+So Epic's order is placed with nothing attached (`adapters/epic.claim_unattached`,
+over `barecdp.py`). `BaseAdapter.unattached_checkout` makes the runner do
+everything else in the usual session - health, ownership, an add-on's
+prerequisite - collect the orders (`runner._Deferred`), **close that session**,
+and place them in a `manager.bare_session` (`runner._place_unattached`): a new
+Chrome process Playwright never touched, the same launch the automatic sign-in
+uses. The bare checkout has the same phases as `_drive_checkout` (the order
+button once, a consent whenever it appears, never the order button again),
+enables no CDP domain, and takes its verdict from the store, not a banner. A
+captcha that appears anyway is still `CheckoutBlocked` and still a person's:
+nothing about "never answer one" changed. Without real Chrome the run falls
+back to the attached `claim`. `tools/unattached_checkout_sim.py` pins it.
+
+Things learned on the way, all measured the same day:
+
+- **The store's own ownership answer** is `POST
+  store.epicgames.com/proxy/api/purchase/offer-entitlements` with
+  `{"offers":[{"offerId","sandboxId"}]}` and the header `x-csrf-token` set to
+  the whole (URL-decoded) `egs-csrf` cookie: `OWNED`, `AVAILABLE` or
+  `MISSING_PREREQUISITES` (an add-on whose game is missing, with the item ids).
+  Without the header it is a 403 "CSRF token verification failed". The bare
+  checkout uses it before pressing anything and as the verdict afterwards.
+  `is_owned` (the Playwright page read) answered `None` for SMITE 2 where this
+  answered plainly; moving `is_owned` and the DLC prerequisite onto it is the
+  obvious next step and has not been done.
+- **The checkout page offers "Add to library" for a game the account already
+  owns** (Shop Titans, owned, still showed the button). The page is not an
+  ownership check.
+- **"Get" on a product page is no longer a checkout for a permanently free
+  game.** It posts `…/proxy/api/purchase/quick-purchase` with `{"country",
+  "lineOffers":[{"offerId","namespace"}],"salesChannel":"Windows-Store-EGSWebV2"}`
+  and answers `{"quickPurchaseStatus":"SUCCESS","transactionId"}` - no Talon,
+  no captcha frame, then a "FINAL STEP: is Epic Games Launcher installed?"
+  dialog (which can carry an unticked "share your email with <publisher>"
+  box; never tick it). Seen on two demos and three free-to-play games, on the
+  desktop and in the container. **Whether the weekly giveaway's "Get" takes
+  that route is not known** - a discounted-to-zero game may still open the
+  checkout. Trove presses buttons; it does not call that endpoint itself for
+  an offer whose own page would not.
+- A finished bare checkout **empties the page** (no buttons, no text) rather
+  than showing a thank-you - the "black screen" of the un-driven window, seen
+  from inside.
+- The probes claimed eight free items into the account along the way (two
+  demos, Crosshair V2, Hone, Shop Titans, Firestone, Fishing Planet,
+  Metalstorm, World of Warships, SMITE 2). Firestone was one of the 26 Nov
+  giveaways and is free to play anyway.
 
 **So the fallback CLAUDE.md reserved is now built: finish the checkout in the
 un-driven window.** When Epic raises a captcha at checkout, `epic._handle_challenge`
@@ -1913,11 +1982,17 @@ backend/.venv/Scripts/python tools/ubisoft_sim.py      # Ubisoft giveaways
 backend/.venv/Scripts/python tools/fanatical_sim.py    # Fanatical, zero-total cart
 backend/.venv/Scripts/python tools/humble_sim.py       # Humble store + Choice
 backend/.venv/Scripts/python tools/session_keep_sim.py # session cookies survive
+backend/.venv/Scripts/python tools/unattached_checkout_sim.py  # Epic's order with nothing attached
 backend/.venv/Scripts/python tools/autosignin_sim.py   # needs real Chrome; also runs in container-smoke
 python tools/close_keeps_cookies_sim.py                # container-smoke only: a close keeps cookies
 ```
 
 When there is a real test suite, put how to run a single test here.
+
+`tools/epic_checkout_probe.py` is not a sim: it drives one real Epic checkout
+over a bare DevTools socket on a profile you name and says whether a captcha
+appeared (`--net` logs what Talon and hCaptcha answered; `--software-gl` forces
+SwiftShader). Its `offer` and `checkout` commands really claim the free item.
 
 ## Releasing
 
@@ -2172,6 +2247,15 @@ session trusting something nobody has run.
   blank, and the ledger draws the art block either way so those rows keep
   their height.
 
+- **That Playwright being attached is what raises Epic's checkout captcha, and
+  that the bare-connection order completes in the container** (24 Nov 2026):
+  the table under "Superseded the next day" above - five bare checkouts
+  completed, two attached ones got a puzzle, interleaved on one profile copy -
+  and the production sequence itself (Playwright session, close,
+  `bare_session`, `claim_unattached`) claimed a free game with the verdict
+  read from the store's entitlement API. The runner half is pinned by
+  `tools/unattached_checkout_sim.py`.
+
 **The checkout, as of Aug 2026 (from a real signed-in account):** the
 `/purchase?offers=1-<ns>-<id>` URL reaches the checkout overlay in the driven
 browser, and for a *free* game it reads "This is free. Add it to your library
@@ -2193,6 +2277,18 @@ and cannot complete it, and the remedy is the un-driven "Finish the claim here"
 window. See the two paragraphs on it above.
 
 **Written and NOT verified:**
+
+- **The unattached checkout on a real weekly giveaway.** Every bare pass on
+  24 Nov was a *permanently free* game. They share the giveaway's Talon flow
+  and site key, but the one bare-CDP attempt on a giveaway itself (Mark of the
+  Deep, 23 Nov, a different ad-hoc driver, hours after several attached
+  attempts) did get a puzzle. So 26 Nov's giveaway (Bread and Fred) is the
+  measurement: the run's log says "Epic checkout (unattached): …" at every
+  step, and a captcha there is recorded exactly as before. If it does get one,
+  compare with the same giveaway through `tools/epic_checkout_probe.py --net`
+  on a desktop before concluding anything. Also unproven through `run_account`
+  on the live install (it was exercised as a script against a profile copy),
+  and the add-on / base-game ordering has only run in the sim.
 
 - **Everything session-bound in `adapters/prime.py`.** There is no Prime
   account here and the signed-out page is an empty shell, so there was no DOM

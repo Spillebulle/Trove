@@ -860,6 +860,15 @@ def is_challenge_title(title: str | None) -> bool:
     return bool(title) and bool(_CHALLENGE_TITLE.search(title))
 
 
+def can_drive_unattached() -> bool:
+    """Is the browser Trove resolved real Chrome, which `bare_session` needs?
+
+    Answered from what `resolve_channel` already decided, so it is only
+    meaningful once a session has been opened - which is when it is asked.
+    """
+    return _channel == "chrome" and find_chrome_executable() is not None
+
+
 def read_devtools_port(profile_path: Path) -> int | None:
     """The port Chrome chose for `--remote-debugging-port=0`, from its own file."""
     try:

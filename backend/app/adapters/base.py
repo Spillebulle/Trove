@@ -389,3 +389,22 @@ class BaseAdapter(ABC):
         With no waiter (a scheduled run), a captcha is `NeedsAttention` as
         always - Trove never solves one itself.
         """
+
+    # A store whose order has to be placed with **nothing but a bare DevTools
+    # connection** on the browser sets this and implements `claim_unattached`.
+    # The runner then does everything else in the usual session (health,
+    # ownership, an add-on's prerequisite), closes it, and places the orders in
+    # a second visit with no Playwright attached. Epic is the store this was
+    # measured on - see `barecdp.py` - and nothing else should set it on a
+    # guess: the usual path is simpler and is what every other store has
+    # claimed through.
+    unattached_checkout: bool = False
+
+    async def claim_unattached(self, port: int, offer: FreeOffer) -> ClaimResult:
+        """`claim`, but driving the Chrome listening on `port` over bare CDP.
+
+        Same contract as `claim`: one attempt, a `ClaimResult`, and
+        `NeedsAttention` (or a subclass) when only a person can go on.
+        """
+        raise NotImplementedError
+

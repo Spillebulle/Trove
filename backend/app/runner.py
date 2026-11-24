@@ -29,6 +29,7 @@ notification never describes something the UI cannot show a row for.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import random
 from datetime import timedelta
@@ -45,6 +46,7 @@ from .browser import (
     SignedOut,
     StoreChallenged,
     StoreUnavailable,
+    can_drive_unattached,
     http_refusal_reason,
     is_refusal_note,
     first_page,
@@ -1172,6 +1174,11 @@ async def _do_run(
             pass
         return
 
+    # Orders a store wants placed with nothing attached to the browser
+    # (`adapter.unattached_checkout`) are collected here by the session below
+    # and placed after it has closed, in a Chrome Playwright never touched.
+    deferred: list[_Deferred] = []
+
     async with manager.session(
         account.id, profile_path, holder="a claim run", wait_s=2.0,
         warm_url=adapter.warm_url or None,
@@ -1214,7 +1221,11 @@ async def _do_run(
                     )
                     return
 
-            await _run_claims(db, account, run, adapter, page, pending, waiter)
+            unattached = adapter.unattached_checkout and can_drive_unattached()
+            await _run_claims(
+                db, account, run, adapter, page, pending, waiter,
+                deferred=deferred if unattached else None,
+            )
         except NeedsAttention as exc:
             held_note = f"The run stopped: {exc.reason}"
             raise
@@ -1226,6 +1237,92 @@ async def _do_run(
             # presses Done, whatever the run came to - so a checkout that fails
             # is still there to look at rather than gone in the half-second
             # before the window closes. Outside watch mode this is a no-op.
+            # With orders still to place, the hold belongs to the browser that
+            # places them, or the person would press Done on half a run.
+            if watch and (held_note or not deferred):
+                await _hold_open_for_watch(account.id, held_note or _run_summary(run))
+
+    if deferred:
+        await _place_unattached(db, account, run, adapter, profile_path, deferred, watch)
+
+
+@dataclass
+class _Deferred:
+    """An order to place once the session has closed. See `_place_unattached`.
+
+    `row` is None for a base game claimed so an add-on can be used: a real
+    claim that was never a listed giveaway, recorded under `title`. `needs`
+    is the add-on waiting on it, told if the game does not land.
+    """
+
+    offer: FreeOffer
+    row: Offer | None
+    title: str | None = None
+    image_url: str | None = None
+    needs: "_Deferred | None" = None
+    skip: bool = False
+
+
+async def _place_unattached(
+    db, account, run, adapter, profile_path: Path, deferred: list[_Deferred], watch: bool
+) -> None:
+    """Place the collected orders in a Chrome with only a DevTools port on it.
+
+    Measured on Epic, 24 Nov 2026 (see `barecdp`): the same checkout that
+    raises an interactive captcha with Playwright attached completes silently
+    over a bare connection. So the session that checked the account and the
+    library is closed first, and this opens the profile again the way the
+    automatic sign-in does - same lock, same launch, no Playwright.
+    """
+    held_note: str | None = None
+    async with manager.bare_session(
+        account.id, profile_path, holder="a claim run", wait_s=15.0
+    ) as port:
+        try:
+            for index, item in enumerate(deferred):
+                if item.skip:
+                    continue
+                if index:
+                    await asyncio.sleep(PAUSE_BETWEEN_CLAIMS_S)
+                result = await adapter.claim_unattached(port, item.offer)
+                if item.row is not None:
+                    _record_result(db, account, run, adapter, item.offer, item.row, result)
+                    continue
+                # A base game, claimed for the add-on that follows it.
+                waiting = item.needs
+                _record(
+                    db, account, run, None,
+                    outcome=result.outcome,
+                    detail=(result.detail or "Claimed so the add-on could be used.")
+                    + (f" Claimed because {waiting.offer.title} needs it." if waiting else ""),
+                    shot=result.screenshot,
+                    title=item.title,
+                    kind="game",
+                    image_url=item.image_url,
+                )
+                if result.outcome == "claimed":
+                    run.claimed += 1
+                elif result.outcome == "already_owned":
+                    run.already_owned += 1
+                elif waiting is not None and waiting.row is not None:
+                    waiting.skip = True
+                    _record(
+                        db, account, run, waiting.row,
+                        outcome="not_eligible",
+                        detail=(
+                            f"Not claimed: {item.title}, which this add-on needs, could "
+                            "not be claimed first."
+                        ),
+                        reason_code=REASON_BASE_FAILED,
+                    )
+                db.commit()
+        except NeedsAttention as exc:
+            held_note = f"The run stopped: {exc.reason}"
+            raise
+        except Exception as exc:
+            held_note = f"The run failed: {type(exc).__name__}: {exc}"
+            raise
+        finally:
             if watch:
                 await _hold_open_for_watch(account.id, held_note or _run_summary(run))
 
@@ -1287,8 +1384,15 @@ async def _check_health(db, account, adapter, page) -> None:
         _set_status(db, account, "ok", None, None)
 
 
-async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
-    """Attempt each pending offer. The session is already health-checked."""
+async def _run_claims(
+    db, account, run, adapter, page, pending, waiter, deferred: list | None = None
+) -> None:
+    """Attempt each pending offer. The session is already health-checked.
+
+    With `deferred` given, everything but the order happens here - ownership,
+    the blocked-checkout skip, an add-on's prerequisite - and the order itself
+    is appended to it for `_place_unattached`.
+    """
     store = account.store
 
     for index, (offer, row) in enumerate(pending):
@@ -1335,51 +1439,63 @@ async def _run_claims(db, account, run, adapter, page, pending, waiter) -> None:
         # skipped with the reason written down rather than attempted blind.
         if offer.kind == "dlc":
             if not await _satisfy_base_game(
-                db, account, run, adapter, page, offer, row, waiter
+                db, account, run, adapter, page, offer, row, waiter, deferred
             ):
                 continue
 
+        if deferred is not None:
+            item = _Deferred(offer=offer, row=row)
+            if deferred and deferred[-1].row is None and deferred[-1].needs is None:
+                deferred[-1].needs = item  # the base game queued just above
+            deferred.append(item)
+            continue
+
         result = await adapter.claim(page, offer, waiter=waiter)
-        _record(
-            db,
-            account,
-            run,
-            row,
-            outcome=result.outcome,
-            detail=result.detail,
-            key_code=result.key_code,
-            key_store=result.key_store,
-            shot=result.screenshot,
-            reason_code=result.reason_code,
+        _record_result(db, account, run, adapter, offer, row, result)
+
+
+def _record_result(db, account, run, adapter, offer, row, result) -> None:
+    """Write down what one claim came to, and say so if it landed."""
+    _record(
+        db,
+        account,
+        run,
+        row,
+        outcome=result.outcome,
+        detail=result.detail,
+        key_code=result.key_code,
+        key_store=result.key_store,
+        shot=result.screenshot,
+        reason_code=result.reason_code,
+    )
+    if result.outcome in ("claimed", "already_owned") and (
+        account.checkout_offer == offer.external_id
+    ):
+        _clear_checkout_marker(account)  # the block is resolved
+    if result.outcome == "claimed":
+        run.claimed += 1
+        notify.send_soon(
+            "claimed",
+            notify.Notification(
+                account_id=account.id,
+                # The game is the headline and its poster is the picture;
+                # the store and account go in the footer. A claim should
+                # look like the thing it is, not like a log line.
+                title=row.title,
+                detail=result.detail or "Added to your library.",
+                severity="good",
+                context=f"{adapter.display_name} · {account.label}",
+                url=row.url,
+                image_url=row.image_url,
+            ),
         )
-        if result.outcome in ("claimed", "already_owned") and (
-            account.checkout_offer == offer.external_id
-        ):
-            _clear_checkout_marker(account)  # the block is resolved
-        if result.outcome == "claimed":
-            run.claimed += 1
-            notify.send_soon(
-                "claimed",
-                notify.Notification(
-                    account_id=account.id,
-                    # The game is the headline and its poster is the picture;
-                    # the store and account go in the footer. A claim should
-                    # look like the thing it is, not like a log line.
-                    title=row.title,
-                    detail=result.detail or "Added to your library.",
-                    severity="good",
-                    context=f"{adapter.display_name} · {account.label}",
-                    url=row.url,
-                    image_url=row.image_url,
-                ),
-            )
-        elif result.outcome == "already_owned":
-            run.already_owned += 1
-        db.commit()
+    elif result.outcome == "already_owned":
+        run.already_owned += 1
+    db.commit()
 
 
 async def _satisfy_base_game(
-    db, account, run, adapter, page, offer, row, waiter
+    db, account, run, adapter, page, offer, row, waiter, deferred: list | None = None
 ) -> bool:
     """Make sure the game a DLC needs is owned. True if the DLC may be claimed.
 
@@ -1425,6 +1541,14 @@ async def _satisfy_base_game(
             "Epic: %r needs %r, which is free. Claiming the game first.",
             offer.title, base.title,
         )
+        if deferred is not None:
+            # Ordered with the rest, after the session closes; the add-on is
+            # queued behind it by the caller and skipped if it does not land.
+            base.offer.extra.setdefault("account_id", account.id)
+            deferred.append(
+                _Deferred(offer=base.offer, row=None, title=base.title, image_url=row.image_url)
+            )
+            return True
         result = await adapter.claim(page, base.offer, waiter=waiter)
         _record(
             db, account, run, None,

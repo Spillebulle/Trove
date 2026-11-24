@@ -49,6 +49,7 @@ from ..browser import (
     CheckoutBlocked,
     NeedsAttention,
     StoreChallenged,
+    is_challenge_title,
     screenshot,
     screenshot_name,
 )
@@ -288,6 +289,79 @@ ERROR = [
     'text=/error occurred while trying to process your request/i',
     'text=/please check your network connection/i',
 ]
+
+
+# ── The checkout with nothing attached ───────────────────────────────────────
+#
+# Measured in the container, 24 Nov 2026, on a copy of the live account's
+# profile, the same free game minutes apart: driven through the run's
+# Playwright session the order raised an interactive hCaptcha (twice); driven
+# over a bare DevTools socket the same Talon flow (`checkout_free_prod`, the
+# same site key) answered `getcaptcha` silently and `confirm-order` came back
+# `COMPLETED` (three of three). So the order is placed over `barecdp`, in a
+# Chrome Playwright never touched. See `claim_unattached`.
+
+# What the checkout tab shows, read in one go. It only reads.
+_BARE_STATE_JS = r"""(() => {
+  const vis = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none'; };
+  const mid = el => { const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+  const buttons = [...document.querySelectorAll('button')].filter(vis)
+    .map(b => ({text: (b.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40), disabled: !!b.disabled,
+                at: mid(b), dialog: !!b.closest('[role=dialog]')}))
+    .filter(b => b.text);
+  // A challenge somebody has to answer is a frame with a puzzle in it. The
+  // check that passes by itself also loads hCaptcha frames, but they stay
+  // tiny or hidden - so size is what tells the two apart.
+  const captcha = [...document.querySelectorAll('iframe')].some(f => {
+    const r = f.getBoundingClientRect();
+    return /hcaptcha|arkoselabs|captcha|challenge/i.test((f.src || '') + ' ' + (f.title || ''))
+      && vis(f) && r.width > 200 && r.height > 200; });
+  const text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ');
+  return {url: location.href, title: document.title, buttons, captcha, text: text.slice(0, 600)};
+})()"""
+
+# The store's own answer to "does this account have this offer": the request
+# its product pages make, with the CSRF cookie it sets for that purpose.
+# Measured 24 Nov 2026: `OWNED`, `AVAILABLE` or `MISSING_PREREQUISITES`.
+_BARE_ENTITLEMENT_JS = r"""(async (offerId, sandboxId) => {
+  try {
+    const cookie = document.cookie.split('; ').find(c => c.startsWith('egs-csrf='));
+    if (!cookie) return null;
+    const response = await fetch('/proxy/api/purchase/offer-entitlements', {
+      method: 'POST', credentials: 'include',
+      headers: {'content-type': 'application/json', 'x-csrf-token': decodeURIComponent(cookie.slice(9))},
+      body: JSON.stringify({offers: [{offerId, sandboxId}]})});
+    if (!response.ok) return null;
+    const result = ((await response.json()).results || [])[0];
+    return result ? result.status : null;
+  } catch (e) { return null; }
+})"""
+
+# The button that places the order, and the consent that can follow it, by the
+# words on them - the same wording as PLACE_ORDER and ACCEPT above.
+_BARE_ORDER = ("add to library", "place order", "get now")
+_BARE_CONSENT = ("i accept", "i agree", "accept")
+_BARE_ERROR = re.compile(
+    r"error occurred while trying to process your request|please check your network connection", re.I
+)
+_BARE_NOT_ELIGIBLE = re.compile(
+    r"not available in your region|cannot be purchased in your (region|country)|this product is not available", re.I
+)
+
+# How long the whole checkout is given, and how long the library is given to
+# show the game once the order has gone in.
+UNATTACHED_CHECKOUT_S = 90.0
+BARE_READ_EVERY_S = 1.5
+BARE_BEFORE_CLICK_S = 0.9
+UNATTACHED_CONFIRM_S = 30.0
+
+CAPTCHA_UNATTACHED_REASON = (
+    "Epic put up a captcha to finish this order. Trove does not answer "
+    "captchas, so this one claim has to be finished by hand in the sign-in "
+    "window, the same browser you signed in with. Press “Finish the "
+    "claim here”."
+)
 
 
 # Epic's own backend hosts, the ones the checkout talks to rather than the
@@ -960,6 +1034,181 @@ class EpicAdapter(BaseAdapter):
             "The game was ordered but Trove could not confirm it landed in the "
             "library. Check the account before Trove tries again." + _net_note(net_errors),
             await self._shot(page, offer, "unconfirmed"),
+        )
+
+    # ── The order, with nothing attached ─────────────────────────────────
+
+    unattached_checkout = True
+
+    async def claim_unattached(self, port: int, offer: FreeOffer) -> ClaimResult:
+        """Place the order over a bare DevTools socket. See `barecdp`.
+
+        The same checkout `claim` drives, in the same phases - the order button
+        once, a consent dialog whenever it appears, never the order button
+        again - but in a Chrome Playwright was never attached to, which is the
+        one Epic's check was measured to pass without asking anybody anything.
+        The verdict is the store's own entitlement answer, not a banner.
+        """
+        from .. import barecdp
+
+        namespace = offer.extra.get("namespace")
+        offer_id = offer.extra.get("offer_id")
+        if not namespace or not offer_id:
+            return ClaimResult(
+                outcome="failed",
+                detail="This offer has no Epic namespace, so it cannot be claimed.",
+            )
+        async with barecdp.open_tab(port) as tab:
+            return await self._claim_bare(tab, offer, namespace, offer_id)
+
+    async def _bare_shot(self, tab, offer: FreeOffer, tag: str) -> str | None:
+        account_id = int(offer.extra.get("account_id") or 0)
+        return await tab.screenshot(screenshot_name(account_id, self.store, tag))
+
+    async def _bare_entitlement(self, tab, namespace: str, offer_id: str) -> str | None:
+        try:
+            return await tab.evaluate(
+                f"{_BARE_ENTITLEMENT_JS}({offer_id!r}, {namespace!r})"
+            )
+        except Exception as exc:  # a tab mid-navigation has no context to ask
+            logger.debug("Epic entitlement read failed: %s", exc)
+            return None
+
+    async def _claim_bare(self, tab, offer, namespace, offer_id) -> ClaimResult:
+        loop = asyncio.get_event_loop()
+        await tab.navigate(_purchase_url(namespace, offer_id))
+        started = loop.time()
+        ordered = False
+        consents = 0
+        quiet_reads = 0
+        asked_owned = False
+        last_seen = None
+
+        def named(state, wanted, dialog_first=False):
+            found = [
+                b for b in state["buttons"]
+                if not b["disabled"] and any(b["text"].lower().startswith(w) for w in wanted)
+            ]
+            if dialog_first:
+                found.sort(key=lambda b: not b["dialog"])
+            return found[0] if found else None
+
+        while loop.time() - started < UNATTACHED_CHECKOUT_S:
+            await asyncio.sleep(BARE_READ_EVERY_S)
+            try:
+                state = await tab.evaluate(_BARE_STATE_JS)
+            except Exception:
+                state = None
+            if not state:
+                continue  # between documents; read again
+
+            labels = [b["text"] for b in state["buttons"]]
+            if labels != last_seen:
+                last_seen = labels
+                logger.info("Epic checkout (unattached): the page shows %s.", labels or "no buttons")
+
+            if is_challenge_title(state.get("title")):
+                # Cloudflare's own check, in front of the checkout. Give it the
+                # time it is given everywhere else; it answers itself or not.
+                if loop.time() - started > CHALLENGE_SETTLE_S:
+                    raise StoreChallenged(
+                        CHALLENGED_REASON.format(seconds=loop.time() - started),
+                        await self._bare_shot(tab, offer, "challenge"),
+                    )
+                continue
+
+            if state["captcha"]:
+                logger.info(
+                    "Epic checkout (unattached): a captcha is up after all; "
+                    "stopping for the un-driven window."
+                )
+                raise CheckoutBlocked(
+                    CAPTCHA_UNATTACHED_REASON,
+                    await self._bare_shot(tab, offer, "captcha"),
+                    offer_id=offer.external_id,
+                )
+
+            if "/id/login" in state["url"] or "/login?" in state["url"]:
+                raise NeedsAttention(
+                    "This account is signed out of Epic. Sign in again in the "
+                    "sign-in window.",
+                    await self._bare_shot(tab, offer, "signed-out"),
+                )
+
+            if not ordered:
+                if _BARE_NOT_ELIGIBLE.search(state["text"]):
+                    return ClaimResult(
+                        outcome="not_eligible",
+                        detail="Epic will not sell this to your account, usually a region limit.",
+                    )
+                if not asked_owned and state["buttons"]:
+                    # The checkout page offers "Add to library" for a game the
+                    # account already has (measured), so ownership is asked of
+                    # the store before anything is pressed.
+                    asked_owned = True
+                    if await self._bare_entitlement(tab, namespace, offer_id) == "OWNED":
+                        return ClaimResult(outcome="already_owned", detail="Already in your library.")
+            elif _BARE_ERROR.search(state["text"]):
+                raise NeedsAttention(
+                    "Epic reported an error while processing the order. Trove "
+                    "has stopped rather than press the button again.",
+                    await self._bare_shot(tab, offer, "order-error"),
+                )
+
+            consent = named(state, _BARE_CONSENT, dialog_first=True)
+            if consent is not None and ordered and consents < 3:
+                logger.info("Epic checkout (unattached): accepting %r.", consent["text"])
+                await asyncio.sleep(BARE_BEFORE_CLICK_S)
+                await tab.click(*consent["at"])
+                consents += 1
+                quiet_reads = 0
+                continue
+
+            order = named(state, _BARE_ORDER)
+            if order is not None and not ordered:
+                logger.info("Epic checkout (unattached): pressing %r, once.", order["text"])
+                await asyncio.sleep(BARE_BEFORE_CLICK_S)
+                await tab.click(*order["at"])
+                ordered = True
+                continue
+
+            if ordered and consent is None:
+                # The order is in. Epic ends a finished checkout by emptying
+                # the page (the black screen of the un-driven window), and the
+                # order button can linger behind a closing dialog first - so
+                # two quiet reads, then the store is asked.
+                quiet_reads += 1
+                if quiet_reads >= 2 and (order is None or quiet_reads >= 6):
+                    break
+
+        if not ordered:
+            raise NeedsAttention(
+                "Epic's checkout opened but Trove could not find the button "
+                "that places the order. Watch a run to see the page.",
+                await self._bare_shot(tab, offer, "no-order-button"),
+            )
+
+        # The verdict is the library, not the page.
+        confirm_started = loop.time()
+        went_to_store = False
+        while loop.time() - confirm_started < UNATTACHED_CONFIRM_S:
+            status = await self._bare_entitlement(tab, namespace, offer_id)
+            if status == "OWNED":
+                logger.info("Epic checkout (unattached): %r is in the library.", offer.title)
+                return ClaimResult(outcome="claimed", detail="Added to your library.")
+            if status is None and not went_to_store:
+                # The emptied checkout page may have nothing to ask with; the
+                # store front does.
+                went_to_store = True
+                await tab.navigate(f"{STORE_ROOT}/{LOCALE}/")
+                await asyncio.sleep(BARE_READ_EVERY_S * 3)
+                continue
+            await asyncio.sleep(BARE_READ_EVERY_S * 2)
+
+        raise NeedsAttention(
+            "The game was ordered but Trove could not confirm it landed in the "
+            "library. Check the account before Trove tries again.",
+            await self._bare_shot(tab, offer, "unconfirmed"),
         )
 
     # ── Shared ───────────────────────────────────────────────────────────

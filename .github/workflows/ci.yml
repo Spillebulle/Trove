@@ -122,3 +122,6 @@ jobs:
 
       - name: A browser-session sign-in survives the handover to a run
         run: python tools/session_keep_sim.py
+
+      - name: Epic's order is placed with nothing attached, after the session closes
+        run: python tools/unattached_checkout_sim.py
